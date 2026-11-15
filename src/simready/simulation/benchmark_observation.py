@@ -283,6 +283,13 @@ def _worker_main(argv=None) -> int:
     parser.add_argument("--subframes", type=int, default=8)
     parser.add_argument("--warmup-updates", type=int, default=12)
     parser.add_argument("--capture-attempts", type=int, default=8)
+    parser.add_argument(
+        "--ready-timeout-s",
+        type=float,
+        default=600.0,
+        help="Bounded renderer-readiness wait; cold shader caches compile for "
+        "minutes before the first frame",
+    )
     args = parser.parse_args(argv)
 
     plan_data = read_json(args.plan)
@@ -400,6 +407,7 @@ def _worker_main(argv=None) -> int:
                 args.capture_attempts,
                 stage_units,
                 capture_mode="rgbd" if want_depth else "rgb",
+                ready_timeout_s=args.ready_timeout_s,
             )
 
             _validate_capture_result(
@@ -487,6 +495,7 @@ def main(argv=None) -> int:
     worker_p.add_argument("--subframes", type=int, default=8)
     worker_p.add_argument("--warmup-updates", type=int, default=12)
     worker_p.add_argument("--capture-attempts", type=int, default=8)
+    worker_p.add_argument("--ready-timeout-s", type=float, default=600.0)
 
     args = parser.parse_args(argv)
     if args.command == "plan":

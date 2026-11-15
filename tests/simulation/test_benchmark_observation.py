@@ -2,7 +2,9 @@
 
 import copy
 import json
+import time
 
+import numpy as np
 import pytest
 
 from simready.core.artifacts import digest, write_json
@@ -571,6 +573,7 @@ def _stub_capture(monkeypatch):
         attempts,
         stage_units,
         capture_mode,
+        ready_timeout_s=600.0,
     ):
         rgb = np.full((height, width, 4), 127, dtype=np.uint8)
         return rgb, None, {}, 1
@@ -944,6 +947,7 @@ class TestWorkerManifestRootAndExitCodes:
             attempts,
             stage_units,
             capture_mode,
+            ready_timeout_s=600.0,
         ):
             return (np.full((height, width, 4), 90, dtype=np.uint8), None, {}, 1)
 
@@ -1024,3 +1028,337 @@ class TestWorkerManifestRootAndExitCodes:
         assert plan_data["output_dir"] == "/output"
         # Writable output never sits inside the read-only bundle mount.
         assert not output_dir.is_relative_to(bundle)
+
+
+class TestRendererReadiness:
+    """F-GPU-9: cold shader caches must wait (bounded) or fail loudly."""
+
+    @staticmethod
+    def _fake_rep(empty_for, *, dtype=np.uint8, shape=(8, 8, 4), std=40.0):
+        """rep stub whose rgb annotator stays empty for the first N reads."""
+        import types
+
+        state = {"reads": 0}
+
+        class _Annotator:
+            def __init__(self, name):
+                self.name = name
+
+            def attach(self, product):
+                pass
+
+            def get_data(self):
+                state["reads"] += 1
+                if state["reads"] <= empty_for:
+                    return np.zeros((0,), dtype=np.uint8)
+                frame = np.full(shape, 120, dtype=dtype)
+                if std:
+                    frame[..., 0] = 40
+                    frame[..., 1] = 200  # std well above the uniform guard
+                return frame
+
+        class _App:
+            def update(self):
+                state.setdefault("updates", 0)
+                state["updates"] += 1
+
+        rep = types.SimpleNamespace(
+            create=types.SimpleNamespace(render_product=lambda cam, res: object()),
+            AnnotatorRegistry=types.SimpleNamespace(
+                get_annotator=lambda name: _Annotator(name)
+            ),
+            orchestrator=types.SimpleNamespace(
+                step=lambda **kw: None, wait_until_complete=lambda: None
+            ),
+        )
+        return rep, _App(), state
+
+    def test_cold_cache_waits_until_frames_arrive(self):
+        """Annotator empty for 30 reads (cold compile) then real frames:
+        capture must wait and succeed - no fake data, no early failure."""
+        from simready.simulation.depth_observation import _capture_single_view
+
+        rep, app, state = self._fake_rep(empty_for=30)
+        rgb, depth, stats, attempt = _capture_single_view(
+            rep,
+            "/Cam",
+            8,
+            8,
+            False,
+            app,
+            warmup_updates=2,
+            subframes=2,
+            capture_attempts=4,
+            stage_units=1.0,
+            capture_mode="rgb",
+            ready_timeout_s=30.0,
+        )
+        assert rgb.shape == (8, 8, 4) and rgb.dtype == np.uint8
+        assert depth is None
+        assert attempt >= 1
+        assert state["reads"] > 30  # actually waited through the cold period
+
+    def test_cold_cache_timeout_fails_loudly(self):
+        """Renderer never produces frames: bounded, diagnosable readiness
+        error - NOT the generic raster mismatch after eight blind attempts."""
+        from simready.simulation.depth_observation import _capture_single_view
+
+        rep, app, _ = self._fake_rep(empty_for=10**9)
+        with pytest.raises(ValueError, match="Renderer produced no frames"):
+            _capture_single_view(
+                rep,
+                "/Cam",
+                8,
+                8,
+                False,
+                app,
+                warmup_updates=1,
+                subframes=1,
+                capture_attempts=4,
+                stage_units=1.0,
+                capture_mode="rgb",
+                ready_timeout_s=0.3,
+            )
+
+    def test_warm_cache_immediate_capture_unchanged(self):
+        """Frames already flowing: success on the first attempt as before."""
+        from simready.simulation.depth_observation import _capture_single_view
+
+        rep, app, _ = self._fake_rep(empty_for=0)
+        rgb, _, _, attempt = _capture_single_view(
+            rep,
+            "/Cam",
+            8,
+            8,
+            False,
+            app,
+            warmup_updates=1,
+            subframes=2,
+            capture_attempts=4,
+            stage_units=1.0,
+            capture_mode="rgb",
+            ready_timeout_s=10.0,
+        )
+        assert attempt == 1 and rgb.shape == (8, 8, 4)
+
+    def test_raster_validation_not_weakened(self):
+        """Data arriving with the wrong dtype must still be rejected by the
+        existing uint8 raster guard (readiness never bypasses validation)."""
+        from simready.simulation.depth_observation import _capture_single_view
+
+        rep, app, _ = self._fake_rep(empty_for=0, dtype=np.float32)
+        with pytest.raises(ValueError, match="not a matching uint8 raster"):
+            _capture_single_view(
+                rep,
+                "/Cam",
+                8,
+                8,
+                False,
+                app,
+                warmup_updates=1,
+                subframes=2,
+                capture_attempts=2,
+                stage_units=1.0,
+                capture_mode="rgb",
+                ready_timeout_s=10.0,
+            )
+
+
+class _NoopOrchestrator:
+    def step(self, **kwargs):
+        pass
+
+    def wait_until_complete(self):
+        pass
+
+
+class TestRendererReadinessControls:
+    """Astra-review controls for the readiness gate."""
+
+    def test_dict_wrapped_empty_buffer_recognized_as_not_ready(self):
+        """Replicator may wrap data as {'data': ...}; an empty dict-wrapped
+        buffer must keep waiting, not count as a size-1 scalar ready."""
+        from simready.simulation.depth_observation import wait_for_renderer_frames
+
+        state = {"reads": 0}
+
+        class _Annotator:
+            def get_data(self):
+                state["reads"] += 1
+                if state["reads"] <= 3:
+                    return {"data": np.zeros((0,), dtype=np.uint8)}
+                return {"data": np.ones((4, 4, 4), dtype=np.uint8)}
+
+        class _App:
+            def update(self):
+                pass
+
+        class _Orch:
+            def step(self, **kw):
+                pass
+
+            def wait_until_complete(self):
+                pass
+
+        elapsed = wait_for_renderer_frames(
+            _App(), _Orch(), [("rgb", _Annotator())], timeout_s=5.0
+        )
+        assert state["reads"] >= 4 and elapsed <= 5.0
+
+    def test_rgbd_readiness_requires_depth_too(self):
+        """RGB ready but depth still empty must keep waiting (rgbd)."""
+        from simready.simulation.depth_observation import wait_for_renderer_frames
+
+        state = {"reads": 0}
+
+        class _Rgb:
+            def get_data(self):
+                return np.ones((4, 4, 4), dtype=np.uint8)
+
+        class _Depth:
+            def get_data(self):
+                state["reads"] += 1
+                if state["reads"] <= 2:
+                    return np.zeros((0,), dtype=np.float32)
+                return np.ones((4, 4), dtype=np.float32)
+
+        class _App:
+            def update(self):
+                pass
+
+        class _Orch:
+            def step(self, **kw):
+                pass
+
+            def wait_until_complete(self):
+                pass
+
+        wait_for_renderer_frames(
+            _App(), _Orch(), [("rgb", _Rgb()), ("depth", _Depth())], timeout_s=5.0
+        )
+        assert state["reads"] >= 3
+
+    def test_invalid_timeout_rejected_before_any_work(self):
+        from simready.simulation.depth_observation import (
+            _capture_single_view,
+            wait_for_renderer_frames,
+        )
+
+        class _Explodes:
+            def __getattr__(self, name):
+                raise AssertionError("no work may happen for invalid timeout")
+
+        for bad in (0.0, -1.0, float("nan"), float("inf")):
+            with pytest.raises(ValueError, match="finite positive"):
+                wait_for_renderer_frames(_Explodes(), _Explodes(), [], bad)
+            with pytest.raises(ValueError, match="finite positive"):
+                _capture_single_view(
+                    _Explodes(),
+                    "/c",
+                    8,
+                    8,
+                    False,
+                    _Explodes(),
+                    warmup_updates=1,
+                    subframes=1,
+                    capture_attempts=1,
+                    stage_units=1.0,
+                    capture_mode="rgb",
+                    ready_timeout_s=bad,
+                )
+
+    def test_blocking_update_overshoot_reports_timeout_not_success(self):
+        """Deadline is checked before success: one blocking update that
+        returns after the deadline (with data) still reports timeout."""
+        from simready.simulation.depth_observation import wait_for_renderer_frames
+
+        class _SlowApp:
+            def update(self):
+                time.sleep(0.25)
+
+        class _Ready:
+            def get_data(self):
+                return np.ones((4, 4, 4), dtype=np.uint8)
+
+        with pytest.raises(ValueError, match="produced no frames"):
+            wait_for_renderer_frames(
+                _SlowApp(), _NoopOrchestrator(), [("rgb", _Ready())], timeout_s=0.05
+            )
+
+    def test_malformed_annotator_payload_propagates(self):
+        """A malformed dict payload must surface its real error, not be
+        silently treated as ready/empty."""
+        from simready.simulation.depth_observation import wait_for_renderer_frames
+
+        class _Broken:
+            def get_data(self):
+                return {"unexpected": True}
+
+        class _App:
+            def update(self):
+                pass
+
+        with pytest.raises(KeyError):
+            wait_for_renderer_frames(
+                _App(), _NoopOrchestrator(), [("rgb", _Broken())], timeout_s=1.0
+            )
+
+    def test_buffers_filling_only_after_step_still_reach_ready(self):
+        """Isaac 6.1 behavior pin: annotator buffers stay empty through bare
+        app.update() and only fill after an orchestrator step (observed live:
+        600s of updates produced nothing on a cold cache; the first step
+        filled them). Readiness must therefore tick a discarded step."""
+        from simready.simulation.depth_observation import wait_for_renderer_frames
+
+        state = {"updates": 0, "steps": 0}
+
+        class _App:
+            def update(self):
+                state["updates"] += 1
+
+        class _Orch:
+            def step(self, **kwargs):
+                state["steps"] += 1
+
+            def wait_until_complete(self):
+                pass
+
+        class _StepFilledAnnotator:
+            def get_data(self):
+                if state["steps"] >= 2:
+                    return np.ones((4, 4, 4), dtype=np.uint8)
+                return np.zeros((0,), dtype=np.uint8)  # empty despite updates
+
+        wait_for_renderer_frames(
+            _App(), _Orch(), [("rgb", _StepFilledAnnotator())], timeout_s=5.0
+        )
+        assert state["steps"] >= 2
+        assert state["updates"] >= state["steps"]  # update+step per iteration
+
+    def test_blocking_step_overshoot_reports_timeout_not_success(self):
+        """A step that blocks past the deadline (cold compile) must report
+        timeout even if buffers happened to fill during it."""
+        from simready.simulation.depth_observation import wait_for_renderer_frames
+
+        class _App:
+            def update(self):
+                pass
+
+        class _BlockingStepOrchestrator:
+            def step(self, **kwargs):
+                time.sleep(0.25)
+
+            def wait_until_complete(self):
+                pass
+
+        class _Ready:
+            def get_data(self):
+                return np.ones((4, 4, 4), dtype=np.uint8)
+
+        with pytest.raises(ValueError, match="produced no frames"):
+            wait_for_renderer_frames(
+                _App(),
+                _BlockingStepOrchestrator(),
+                [("rgb", _Ready())],
+                timeout_s=0.05,
+            )

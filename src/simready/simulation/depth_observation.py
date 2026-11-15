@@ -213,6 +213,73 @@ def _create_observation_camera(
     return camera_path
 
 
+def wait_for_renderer_frames(app, orchestrator, annotators, timeout_s):
+    """Cooperatively bounded, loud renderer-readiness wait; returns seconds.
+
+    On a cold derived-data/shader cache Isaac's RTX pipeline can take
+    several minutes to compile before the first frame exists, while
+    SimulationApp's internal viewport wait gives up after 120 frames and
+    only logs INFO - startup then 'completes' with a renderer that produces
+    nothing. Worse, on Isaac 6.1 annotator buffers only fill after an
+    orchestrator step (verified live: 600s of bare app.update() never
+    produced data on a cold cache, while the first step filled them), so
+    this loop ticks update + one minimal discarded render step per
+    iteration. Readiness is data-driven: every given annotator must return
+    a non-empty buffer (dict-wrapped or raw, via ``_array``). It is a
+    COOPERATIVE bound - a single blocking step (shader compilation) may
+    overshoot it, and the launcher's outer ``timeout_s`` remains the hard
+    bound for the whole worker. Raises ValueError (naming the timeout and
+    which buffers stayed empty) instead of failing later as a stack of
+    empty captures. Readiness buffers are discarded; synchronized output
+    still comes only from the full-subframes orchestrator step inside the
+    capture attempts, with raster validation unchanged.
+    """
+    import math as _math
+    import time as _time
+
+    if (
+        isinstance(timeout_s, bool)
+        or not isinstance(timeout_s, (int, float))
+        or not _math.isfinite(timeout_s)
+        or timeout_s <= 0
+    ):
+        raise ValueError("ready_timeout_s must be a finite positive number")
+    deadline = _time.monotonic() + timeout_s
+
+    def _timeout(empty):
+        return ValueError(
+            f"Renderer produced no frames within {timeout_s:.0f}s after "
+            f"annotator attach (empty buffers: {', '.join(empty) or 'none'}); "
+            "likely cold shader-cache compilation - see the kit log and "
+            "raise --ready-timeout-s if the cache is cold"
+        )
+
+    while True:
+        app.update()
+        # Never start a new render step once the cooperative deadline passed.
+        if _time.monotonic() >= deadline:
+            raise _timeout(
+                [
+                    name
+                    for name, annotator in annotators
+                    if _array(annotator.get_data()).size == 0
+                ]
+            )
+        orchestrator.step(rt_subframes=1, delta_time=0.0, pause_timeline=True)
+        orchestrator.wait_until_complete()
+        empty = [
+            name
+            for name, annotator in annotators
+            if _array(annotator.get_data()).size == 0
+        ]
+        # Success is only reported for buffers read within the deadline;
+        # the returned elapsed is real (never clamped).
+        if _time.monotonic() >= deadline:
+            raise _timeout(empty)
+        if not empty:
+            return timeout_s - (deadline - _time.monotonic())
+
+
 def _capture_single_view(
     rep: Any,
     camera_path: str,
@@ -225,6 +292,7 @@ def _capture_single_view(
     capture_attempts: int,
     stage_units: float,
     capture_mode: str = "rgbd",
+    ready_timeout_s: float = 600.0,
 ) -> tuple[np.ndarray, np.ndarray | None, dict[str, Any] | None, int]:
     """Capture one view; returns (rgb, depth_or_None, statistics_or_None, attempt)."""
     if capture_mode not in ("rgb", "rgbd"):
@@ -233,6 +301,13 @@ def _capture_single_view(
         raise ValueError("capture_mode='rgb' conflicts with want_depth=True")
     if capture_mode == "rgbd" and not want_depth:
         raise ValueError("capture_mode='rgbd' requires want_depth=True")
+    if (
+        isinstance(ready_timeout_s, bool)
+        or not isinstance(ready_timeout_s, (int, float))
+        or not math.isfinite(ready_timeout_s)
+        or ready_timeout_s <= 0
+    ):
+        raise ValueError("ready_timeout_s must be a finite positive number")
     product = rep.create.render_product(camera_path, (width, height))
     rgb_annotator = rep.AnnotatorRegistry.get_annotator("rgb")
     depth_annotator = rep.AnnotatorRegistry.get_annotator("distance_to_image_plane")
@@ -241,6 +316,13 @@ def _capture_single_view(
         depth_annotator.attach([product])
     for _ in range(warmup_updates):
         app.update()
+    # Cold shader caches compile for minutes before the first frame; wait
+    # for real data (bounded, loud) instead of burning the capture attempts
+    # on an unready renderer.
+    readiness = [("rgb", rgb_annotator)]
+    if want_depth:
+        readiness.append(("depth", depth_annotator))
+    wait_for_renderer_frames(app, rep.orchestrator, readiness, ready_timeout_s)
     last_failure = "No capture attempted"
     for attempt in range(capture_attempts):
         captured_attempt = attempt + 1
@@ -374,6 +456,7 @@ def _capture(
         capture_attempts=args.capture_attempts,
         stage_units=stage_units,
         capture_mode="rgbd",
+        ready_timeout_s=args.ready_timeout_s,
     )
     for path, expected in inputs["frozen"].items():
         if digest(path) != expected:
@@ -447,6 +530,13 @@ def main(argv: list[str] | None = None) -> int:
         parser.add_argument(f"--{name}", type=Path, required=True)
     parser.add_argument("--subframes", type=int, default=8)
     parser.add_argument("--warmup-updates", type=int, default=12)
+    parser.add_argument(
+        "--ready-timeout-s",
+        type=float,
+        default=600.0,
+        help="Bounded renderer-readiness wait; cold shader caches compile "
+        "for minutes before the first frame",
+    )
     parser.add_argument("--capture-attempts", type=int, default=8)
     args = parser.parse_args(argv)
     for name in ("scene", "scene_spec", "ply", "camera_calibration"):

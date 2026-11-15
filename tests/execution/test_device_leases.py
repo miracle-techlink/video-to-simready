@@ -170,7 +170,11 @@ def test_nested_quarantine_is_visible_to_owner_and_blocks_later_acquisition(
     "recovery_mode,expected",
     [
         ("fail", "RECOVERED"),
-        ("inspect-fail", "NEEDS_REVIEW"),
+        # An inspect rc=1 alone no longer blocks recovery: with a healthy
+        # daemon whose exact-name listing is empty, the container is gone.
+        ("inspect-fail", "RECOVERED"),
+        # The name still exists under a foreign ownership label: listed,
+        # so absence is disproven and removal was already refused.
         ("mismatch", "NEEDS_REVIEW"),
     ],
 )
@@ -351,3 +355,118 @@ def test_discovery_rejects_corrupt_capacity(monkeypatch, memory):
     monkeypatch.setattr("simready.execution.workers.device_lease.run_process", query)
     with pytest.raises(RuntimeError, match="Invalid GPU memory"):
         discover_inventory()
+
+
+@pytest.mark.parametrize(
+    "mode,expected,absence",
+    [
+        ("name-absent", "RECOVERED", True),
+        ("name-neighbor", "RECOVERED", True),
+        ("name-present", "NEEDS_REVIEW", False),
+        ("daemon-error", "NEEDS_REVIEW", False),
+    ],
+)
+def test_recovery_name_absence_distinguishes_gone_from_unknown(
+    tmp_path, device_inventory, fake_docker, monkeypatch, mode, expected, absence
+):
+    """F-GPU-10: a --rm'd container leaves no ID; recovery may confirm
+    absence ONLY via a daemon-successful exact-name listing.
+
+    - name-absent: listing succeeds, name gone -> release.
+    - name-neighbor: a same-prefix neighbor exists; exact compare must not
+      read as present -> release.
+    - name-present: the name still exists (e.g. foreign relabeled) -> keep
+      quarantine.
+    - daemon-error: listing itself failed -> absence unprovable -> keep
+      quarantine, never treat rc!=0 as 'gone'.
+    """
+    locations = paths(tmp_path)
+    monkeypatch.setenv("FAKE_DOCKER_MODE", "inspect-fail")
+    assert (
+        launch_worker(
+            ["-c", "pass"],
+            output=tmp_path / "run",
+            device_inventory=device_inventory,
+            **locations,
+        )
+        == 7
+    )
+    lock = locations["lock_dir"] / "GPU-fixture-0.lease"
+    original = lock.read_text()
+    monkeypatch.setenv("FAKE_DOCKER_MODE", mode)
+    result = recover_device(
+        "GPU-fixture-0",
+        directory=tmp_path / "recovery",
+        lock_dir=locations["lock_dir"],
+        timeout_s=3,
+    )
+    assert result["status"] == expected
+    assert result["name_absence_verified"] is absence
+    assert lock.read_text() == ("" if expected == "RECOVERED" else original)
+    if mode == "name-present":
+        assert "still present" in result["name_absence_reason"]
+    if mode == "daemon-error":
+        assert "Docker listing failed" in result["name_absence_reason"]
+
+
+def test_recovery_with_live_known_id_never_falls_back_to_name(
+    tmp_path, device_inventory, fake_docker, monkeypatch
+):
+    """Astra P1 counterexample: quarantine carries a VERIFIED container id
+    and the container still exists (possibly renamed). An empty name
+    listing must NOT overwrite that and release the GPU lease."""
+    locations = paths(tmp_path)
+    monkeypatch.setenv("FAKE_DOCKER_MODE", "remove-fail")
+    assert (
+        launch_worker(
+            ["-c", "pass"],
+            output=tmp_path / "run",
+            device_inventory=device_inventory,
+            **locations,
+        )
+        == 7
+    )
+    lock = locations["lock_dir"] / "GPU-fixture-0.lease"
+    original = lock.read_text()
+    assert "container_id" in original  # launch-time cleanup verified the id
+    # Recovery: container still listed under its id (name may differ).
+    result = recover_device(
+        "GPU-fixture-0",
+        directory=tmp_path / "recovery",
+        lock_dir=locations["lock_dir"],
+        timeout_s=3,
+    )
+    assert result["status"] == "NEEDS_REVIEW"
+    assert result.get("known_id_absent") is False
+    assert "name_absence_verified" not in result  # fallback must not run
+    assert lock.read_text() == original
+
+
+def test_recovery_id_query_error_with_absent_name_keeps_quarantine(
+    tmp_path, device_inventory, fake_docker, monkeypatch
+):
+    """Valid known id whose listing query fails: absence unprovable, and a
+    coincidentally empty name listing must not authorize release."""
+    locations = paths(tmp_path)
+    monkeypatch.setenv("FAKE_DOCKER_MODE", "remove-fail")
+    assert (
+        launch_worker(
+            ["-c", "pass"],
+            output=tmp_path / "run",
+            device_inventory=device_inventory,
+            **locations,
+        )
+        == 7
+    )
+    lock = locations["lock_dir"] / "GPU-fixture-0.lease"
+    original = lock.read_text()
+    monkeypatch.setenv("FAKE_DOCKER_MODE", "id-query-error")
+    result = recover_device(
+        "GPU-fixture-0",
+        directory=tmp_path / "recovery",
+        lock_dir=locations["lock_dir"],
+        timeout_s=3,
+    )
+    assert result["status"] == "NEEDS_REVIEW"
+    assert "name_absence_verified" not in result
+    assert lock.read_text() == original
