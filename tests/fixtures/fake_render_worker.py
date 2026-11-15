@@ -38,7 +38,9 @@ def _placeholder_rgb(view_id: str, width: int, height: int, seed: int) -> np.nda
     view's image is pixel-detectable downstream.
     """
     rng = np.random.default_rng(
-        int.from_bytes(hashlib.sha256(f"{seed}:{view_id}".encode()).digest()[:4], "little")
+        int.from_bytes(
+            hashlib.sha256(f"{seed}:{view_id}".encode()).digest()[:4], "little"
+        )
     )
     base = rng.integers(0, 256, (height, width, 3), dtype=np.uint8)
     # Stamp the view index in the top-left corner to make per-view images unique.
@@ -49,7 +51,9 @@ def _placeholder_rgb(view_id: str, width: int, height: int, seed: int) -> np.nda
 def _placeholder_depth(view_id: str, width: int, height: int, seed: int) -> np.ndarray:
     """Return a deterministic placeholder depth map (camera-z, metres)."""
     rng = np.random.default_rng(
-        int.from_bytes(hashlib.sha256(f"depth:{seed}:{view_id}".encode()).digest()[:4], "little")
+        int.from_bytes(
+            hashlib.sha256(f"depth:{seed}:{view_id}".encode()).digest()[:4], "little"
+        )
     )
     return rng.uniform(0.5, 5.0, size=(height, width)).astype(np.float32)
 
@@ -172,11 +176,22 @@ def run_render_request(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=SYNTHETIC_BANNER)
-    parser.add_argument("--request", type=Path, required=True, help="Frozen render request JSON")
+    parser.add_argument(
+        "--request", type=Path, required=True, help="Frozen render request JSON"
+    )
     parser.add_argument("--out", type=Path, required=True, help="Output directory")
-    parser.add_argument("--fail-at-view", type=int, default=None, help="Inject failure at view index")
-    parser.add_argument("--timeout-after", type=float, default=None, help="Inject timeout after N seconds")
-    parser.add_argument("--corrupt-hash", action="store_true", help="Inject receipt hash mismatch")
+    parser.add_argument(
+        "--fail-at-view", type=int, default=None, help="Inject failure at view index"
+    )
+    parser.add_argument(
+        "--timeout-after",
+        type=float,
+        default=None,
+        help="Inject timeout after N seconds",
+    )
+    parser.add_argument(
+        "--corrupt-hash", action="store_true", help="Inject receipt hash mismatch"
+    )
     args = parser.parse_args(argv)
 
     request = json.loads(args.request.read_text())
@@ -187,7 +202,10 @@ def main(argv: list[str] | None = None) -> int:
         timeout_after=args.timeout_after,
         corrupt_hash=args.corrupt_hash,
     )
-    print(json.dumps({"synthetic_fixture": True, "receipt_views": receipt["completed"]}), flush=True)
+    print(
+        json.dumps({"synthetic_fixture": True, "receipt_views": receipt["completed"]}),
+        flush=True,
+    )
     return 0
 
 

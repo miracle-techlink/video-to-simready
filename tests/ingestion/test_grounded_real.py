@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import os
 import shutil
-import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -125,11 +124,11 @@ def _require_segmentation_stack() -> None:
 def _verify_staged_weights() -> dict[str, Path]:
     """Verify Agent G's staged weights exist and match pinned sha256s."""
     missing = []
-    for model_id, (directory, revision, expected_hashes) in WEIGHT_SOURCES.items():
+    for model_id, (directory, _revision, expected_hashes) in WEIGHT_SOURCES.items():
         if not directory.exists():
             missing.append(f"{model_id}: directory {directory} not found")
             continue
-        for filename, expected_sha in expected_hashes.items():
+        for filename, _expected_sha in expected_hashes.items():
             path = directory / filename
             if not path.exists():
                 missing.append(f"{model_id}: {filename} missing")
@@ -142,7 +141,9 @@ def _verify_staged_weights() -> dict[str, Path]:
                 )
     if missing:
         pytest.skip("staged weights incomplete or corrupted: " + "; ".join(missing))
-    return {model_id: directory for model_id, (directory, _, _) in WEIGHT_SOURCES.items()}
+    return {
+        model_id: directory for model_id, (directory, _, _) in WEIGHT_SOURCES.items()
+    }
 
 
 @pytest.fixture(scope="module")
@@ -154,7 +155,7 @@ def hf_cache(tmp_path_factory):
     This fixture copies the verified staged files into that layout.
     """
     _require_segmentation_stack()
-    weight_dirs = _verify_staged_weights()
+    _verify_staged_weights()
     cache_root = tmp_path_factory.mktemp("hf_cache")
     for model_id, (directory, revision, expected_hashes) in WEIGHT_SOURCES.items():
         # HF cache layout: models--<org>--<name>/snapshots/<revision>/
@@ -275,8 +276,7 @@ def test_masks_are_binary_grayscale_and_match_image_size(manifest, test_image):
         mask = np.asarray(Image.open(mask_path))
         assert mask.ndim == 2, "mask must be single-channel grayscale"
         assert mask.shape == (source.height, source.width), (
-            f"mask shape {mask.shape} != image size "
-            f"({source.height}, {source.width})"
+            f"mask shape {mask.shape} != image size ({source.height}, {source.width})"
         )
         unique = set(np.unique(mask).tolist())
         assert unique <= MASK_VALUES_BINARY, (

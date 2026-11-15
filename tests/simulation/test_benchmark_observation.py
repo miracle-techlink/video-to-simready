@@ -1,16 +1,12 @@
 """Benchmark observation worker: contract validation, receipt layout, failure semantics."""
 
 import json
-from pathlib import Path
 
-import numpy as np
 import pytest
 
 from simready.core.artifacts import digest, write_json
 from simready.core.benchmark_contract import (
     ContractError,
-    validate_render_request,
-    validate_view_set,
 )
 
 
@@ -79,7 +75,10 @@ def _write_render_request(tmp_path, **overrides):
         "schema_version": 1,
         "request_id": "req-1",
         "scene": {"path": "scene.usda", "sha256": digest(scene_file)},
-        "reconstruction": {"path": "reconstruction.json", "sha256": digest(reconstruction_file)},
+        "reconstruction": {
+            "path": "reconstruction.json",
+            "sha256": digest(reconstruction_file),
+        },
         "view_set": {"path": "view_set.json", "sha256": digest(view_set_file)},
         "renderer": {
             "name": "isaac-sim",
@@ -164,7 +163,10 @@ class TestPlanValidation:
             "schema_version": 1,
             "request_id": "req-1",
             "scene": {"path": "scene.usda", "sha256": digest(scene_file)},
-            "reconstruction": {"path": "reconstruction.json", "sha256": digest(reconstruction_file)},
+            "reconstruction": {
+                "path": "reconstruction.json",
+                "sha256": digest(reconstruction_file),
+            },
             "view_set": {"path": "view_set.json", "sha256": digest(vs_path)},
             "renderer": {
                 "name": "isaac-sim",
@@ -223,8 +225,16 @@ class TestReceiptLayout:
         )
         # Must match fake_render_worker receipt keys
         expected_keys = {
-            "synthetic_fixture", "banner", "worker", "scene_id", "seed",
-            "want_depth", "render_settings", "views", "completed", "expected",
+            "synthetic_fixture",
+            "banner",
+            "worker",
+            "scene_id",
+            "seed",
+            "want_depth",
+            "render_settings",
+            "views",
+            "completed",
+            "expected",
             "duration_seconds",
         }
         assert expected_keys <= set(receipt.keys())
@@ -290,7 +300,9 @@ class TestFailureSemantics:
                 "image_settings": {"width": 32, "height": 32, "mode": "rgb"},
                 "scene": {"path": "s.usda"},
             },
-            view_set={"views": [{"view_id": "v0"}, {"view_id": "v1"}, {"view_id": "v2"}]},
+            view_set={
+                "views": [{"view_id": "v0"}, {"view_id": "v1"}, {"view_id": "v2"}]
+            },
             views_result=[
                 {
                     "view_id": "v0",

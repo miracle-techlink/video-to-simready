@@ -6,7 +6,12 @@ import json
 import pytest
 
 from simready.core.artifacts import digest
-from simready.core.reconstruction_contract import checked_ref, declarations, fields, verify_bundle
+from simready.core.reconstruction_contract import (
+    checked_ref,
+    declarations,
+    fields,
+    verify_bundle,
+)
 
 
 def _ref(root, name, content=b"x"):
@@ -75,7 +80,9 @@ def test_verify_bundle_accepts_minimal_valid_bundle(tmp_path):
 def test_verify_bundle_rejects_unknown_top_level_field(tmp_path):
     bundle = _bundle(tmp_path)
     bundle["unexpected"] = True
-    with pytest.raises(ValueError, match="Unknown or invalid reconstruction bundle fields"):
+    with pytest.raises(
+        ValueError, match="Unknown or invalid reconstruction bundle fields"
+    ):
         verify_bundle(_write_bundle(tmp_path, bundle))
 
 
@@ -208,7 +215,11 @@ def test_declarations_reject_verified_scale_without_metric_units(tmp_path):
                 "heldout": [],
                 "evidence": {"path": "frames.json", "sha256": digest(evidence_file)},
             },
-            {"frame": "opencv", "unit": "arbitrary", "scale_status": "verified",
-             "evidence": None},
+            {
+                "frame": "opencv",
+                "unit": "arbitrary",
+                "scale_status": "verified",
+                "evidence": None,
+            },
             tmp_path,
         )

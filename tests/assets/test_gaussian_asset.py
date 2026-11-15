@@ -31,12 +31,16 @@ def _make_ply(tmp_path, points, properties=None, binary=True):
         f.write(header.encode("ascii"))
         if binary:
             for point in points:
-                for i, (name, ptype) in enumerate(properties):
+                for i, (_name, ptype) in enumerate(properties):
                     dtype = {
-                        "float": "<f4", "float32": "<f4",
-                        "double": "<f8", "float64": "<f8",
-                        "uchar": "u1", "uint8": "u1",
-                        "int": "<i4", "int32": "<i4",
+                        "float": "<f4",
+                        "float32": "<f4",
+                        "double": "<f8",
+                        "float64": "<f8",
+                        "uchar": "u1",
+                        "uint8": "u1",
+                        "int": "<i4",
+                        "int32": "<i4",
                     }[ptype]
                     f.write(np.array([point[i]], dtype=dtype).tobytes())
     return ply_path
@@ -53,11 +57,20 @@ def _make_gaussian_ply(tmp_path, n=10):
     dc = rng.normal(0, 0.5, (n, 3)).astype(np.float32)
 
     properties = [
-        ("x", "float"), ("y", "float"), ("z", "float"),
-        ("rot_0", "float"), ("rot_1", "float"), ("rot_2", "float"), ("rot_3", "float"),
-        ("scale_0", "float"), ("scale_1", "float"), ("scale_2", "float"),
+        ("x", "float"),
+        ("y", "float"),
+        ("z", "float"),
+        ("rot_0", "float"),
+        ("rot_1", "float"),
+        ("rot_2", "float"),
+        ("rot_3", "float"),
+        ("scale_0", "float"),
+        ("scale_1", "float"),
+        ("scale_2", "float"),
         ("opacity", "float"),
-        ("f_dc_0", "float"), ("f_dc_1", "float"), ("f_dc_2", "float"),
+        ("f_dc_0", "float"),
+        ("f_dc_1", "float"),
+        ("f_dc_2", "float"),
     ]
 
     header = "ply\nformat binary_little_endian 1.0\n"
@@ -71,11 +84,20 @@ def _make_gaussian_ply(tmp_path, n=10):
         f.write(header.encode("ascii"))
         for i in range(n):
             row = [
-                points[i, 0], points[i, 1], points[i, 2],
-                rotations[i, 0], rotations[i, 1], rotations[i, 2], rotations[i, 3],
-                log_scales[i, 0], log_scales[i, 1], log_scales[i, 2],
+                points[i, 0],
+                points[i, 1],
+                points[i, 2],
+                rotations[i, 0],
+                rotations[i, 1],
+                rotations[i, 2],
+                rotations[i, 3],
+                log_scales[i, 0],
+                log_scales[i, 1],
+                log_scales[i, 2],
                 logits[i, 0],
-                dc[i, 0], dc[i, 1], dc[i, 2],
+                dc[i, 0],
+                dc[i, 1],
+                dc[i, 2],
             ]
             for val in row:
                 f.write(np.array([val], dtype="<f4").tobytes())
@@ -118,10 +140,18 @@ class TestReadPly:
 class TestDecodeVertices:
     def test_rgb_points_decoded(self, tmp_path):
         points = [[1.0, 2.0, 3.0, 255, 0, 0]]
-        ply = _make_ply(tmp_path, points, properties=[
-            ("x", "float"), ("y", "float"), ("z", "float"),
-            ("red", "uchar"), ("green", "uchar"), ("blue", "uchar"),
-        ])
+        ply = _make_ply(
+            tmp_path,
+            points,
+            properties=[
+                ("x", "float"),
+                ("y", "float"),
+                ("z", "float"),
+                ("red", "uchar"),
+                ("green", "uchar"),
+                ("blue", "uchar"),
+            ],
+        )
         result = decode_vertices(read_ply(ply))
         assert result["kind"] == "rgb_points"
         assert result["colors"][0][0] == 1.0  # 255/255
@@ -144,11 +174,20 @@ class TestDecodeVertices:
     def test_zero_quaternion_rejected(self, tmp_path):
         n = 2
         properties = [
-            ("x", "float"), ("y", "float"), ("z", "float"),
-            ("rot_0", "float"), ("rot_1", "float"), ("rot_2", "float"), ("rot_3", "float"),
-            ("scale_0", "float"), ("scale_1", "float"), ("scale_2", "float"),
+            ("x", "float"),
+            ("y", "float"),
+            ("z", "float"),
+            ("rot_0", "float"),
+            ("rot_1", "float"),
+            ("rot_2", "float"),
+            ("rot_3", "float"),
+            ("scale_0", "float"),
+            ("scale_1", "float"),
+            ("scale_2", "float"),
             ("opacity", "float"),
-            ("f_dc_0", "float"), ("f_dc_1", "float"), ("f_dc_2", "float"),
+            ("f_dc_0", "float"),
+            ("f_dc_1", "float"),
+            ("f_dc_2", "float"),
         ]
         header = "ply\nformat binary_little_endian 1.0\n"
         header += f"element vertex {n}\n"
@@ -160,7 +199,22 @@ class TestDecodeVertices:
             f.write(header.encode("ascii"))
             for _ in range(n):
                 # All-zero quaternion.
-                for val in [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, -1.0, -1.0, 0.0, 0.0, 0.0, 0.0]:
+                for val in [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    -1.0,
+                    -1.0,
+                    -1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                ]:
                     f.write(np.array([val], dtype="<f4").tobytes())
         with pytest.raises(ValueError, match="[Zz]ero.*quaternion"):
             decode_vertices(read_ply(ply_path))
@@ -192,8 +246,11 @@ class TestWriteAppearance:
 
     def test_output_must_not_exist(self, tmp_path):
         pytest.importorskip("pxr")
-        data = {"kind": "rgb_points", "points": np.array([[0, 0, 0]], dtype=np.float32),
-                "colors": np.array([[1, 0, 0]], dtype=np.float32)}
+        data = {
+            "kind": "rgb_points",
+            "points": np.array([[0, 0, 0]], dtype=np.float32),
+            "colors": np.array([[1, 0, 0]], dtype=np.float32),
+        }
         out = tmp_path / "existing.usdc"
         out.write_text("exists")
         with pytest.raises(FileExistsError):
@@ -203,8 +260,11 @@ class TestWriteAppearance:
         """The source_to_world Sim3 is applied as a parent Xform, preserving
         the SH frame."""
         pytest.importorskip("pxr")
-        data = {"kind": "rgb_points", "points": np.array([[1, 0, 0]], dtype=np.float32),
-                "colors": np.array([[1, 0, 0]], dtype=np.float32)}
+        data = {
+            "kind": "rgb_points",
+            "points": np.array([[1, 0, 0]], dtype=np.float32),
+            "colors": np.array([[1, 0, 0]], dtype=np.float32),
+        }
         # Scale by 2.
         transform = np.eye(4) * 2
         transform[3, 3] = 1

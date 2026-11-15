@@ -1,6 +1,5 @@
 """Physical spec edge cases: metric scale honesty, metersPerUnit semantics."""
 
-import numpy as np
 import pytest
 
 from simready.assets.physics.physical_spec import normalize_physics
@@ -16,7 +15,11 @@ class TestMetricScaleHonesty:
             normalize_physics(
                 {"mass_kg": 1.0, "motion_type": "dynamic"},
                 geometry_type="box",
-                fallback_contact={"static_friction": 0.8, "dynamic_friction": 0.7, "restitution": 0.0},
+                fallback_contact={
+                    "static_friction": 0.8,
+                    "dynamic_friction": 0.7,
+                    "restitution": 0.0,
+                },
                 metric_scale_declared=False,
             )
 
@@ -25,7 +28,11 @@ class TestMetricScaleHonesty:
         result = normalize_physics(
             {},
             geometry_type="box",
-            fallback_contact={"static_friction": 0.8, "dynamic_friction": 0.7, "restitution": 0.0},
+            fallback_contact={
+                "static_friction": 0.8,
+                "dynamic_friction": 0.7,
+                "restitution": 0.0,
+            },
             metric_scale_declared=False,
         )
         assert result["motion_type"] == "static"
@@ -35,7 +42,11 @@ class TestMetricScaleHonesty:
         result = normalize_physics(
             {"mass_kg": 1.0, "motion_type": "dynamic"},
             geometry_type="box",
-            fallback_contact={"static_friction": 0.8, "dynamic_friction": 0.7, "restitution": 0.0},
+            fallback_contact={
+                "static_friction": 0.8,
+                "dynamic_friction": 0.7,
+                "restitution": 0.0,
+            },
             metric_scale_declared=True,
         )
         assert result["motion_type"] == "dynamic"
@@ -46,7 +57,11 @@ class TestMetricScaleHonesty:
         result = normalize_physics(
             {"mass_kg": 0.1, "motion_type": "dynamic"},
             geometry_type="button",
-            fallback_contact={"static_friction": 0.8, "dynamic_friction": 0.7, "restitution": 0.0},
+            fallback_contact={
+                "static_friction": 0.8,
+                "dynamic_friction": 0.7,
+                "restitution": 0.0,
+            },
             metric_scale_declared=True,
         )
         assert result["mass_kg"] == 0.1
@@ -57,7 +72,11 @@ class TestMetricScaleHonesty:
             normalize_physics(
                 {"mass_kg": 0.1},
                 geometry_type="button",
-                fallback_contact={"static_friction": 0.8, "dynamic_friction": 0.7, "restitution": 0.0},
+                fallback_contact={
+                    "static_friction": 0.8,
+                    "dynamic_friction": 0.7,
+                    "restitution": 0.0,
+                },
                 metric_scale_declared=False,
             )
 
@@ -66,7 +85,11 @@ class TestMetricScaleHonesty:
         result = normalize_physics(
             {},
             geometry_type="box",
-            fallback_contact={"static_friction": 0.8, "dynamic_friction": 0.7, "restitution": 0.0},
+            fallback_contact={
+                "static_friction": 0.8,
+                "dynamic_friction": 0.7,
+                "restitution": 0.0,
+            },
             metric_scale_declared=False,
         )
         assert result["validation"]["scale_status"] == "unverified"
@@ -77,7 +100,11 @@ class TestMetricScaleHonesty:
         result = normalize_physics(
             {"mass_kg": 1.0, "motion_type": "dynamic"},
             geometry_type="box",
-            fallback_contact={"static_friction": 0.8, "dynamic_friction": 0.7, "restitution": 0.0},
+            fallback_contact={
+                "static_friction": 0.8,
+                "dynamic_friction": 0.7,
+                "restitution": 0.0,
+            },
             metric_scale_declared=True,
         )
         assert result["validation"]["scale_status"] == "operator_declared_metric"
@@ -93,7 +120,11 @@ class TestContactParameterBounds:
             normalize_physics(
                 {"contact": {"static_friction": -0.1}},
                 geometry_type="box",
-                fallback_contact={"static_friction": 0.8, "dynamic_friction": 0.7, "restitution": 0.0},
+                fallback_contact={
+                    "static_friction": 0.8,
+                    "dynamic_friction": 0.7,
+                    "restitution": 0.0,
+                },
                 metric_scale_declared=False,
             )
 
@@ -102,7 +133,11 @@ class TestContactParameterBounds:
             normalize_physics(
                 {"contact": {"restitution": 1.1}},
                 geometry_type="box",
-                fallback_contact={"static_friction": 0.8, "dynamic_friction": 0.7, "restitution": 0.0},
+                fallback_contact={
+                    "static_friction": 0.8,
+                    "dynamic_friction": 0.7,
+                    "restitution": 0.0,
+                },
                 metric_scale_declared=False,
             )
 
@@ -111,6 +146,10 @@ class TestContactParameterBounds:
             normalize_physics(
                 {"contact": {"static_friction": 0.5, "dynamic_friction": 0.7}},
                 geometry_type="box",
-                fallback_contact={"static_friction": 0.8, "dynamic_friction": 0.7, "restitution": 0.0},
+                fallback_contact={
+                    "static_friction": 0.8,
+                    "dynamic_friction": 0.7,
+                    "restitution": 0.0,
+                },
                 metric_scale_declared=False,
             )

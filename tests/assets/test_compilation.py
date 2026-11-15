@@ -37,10 +37,13 @@ class TestBounds:
 class TestObjects:
     def test_valid_box(self):
         spec = {
-            "objects": [{
-                "id": "box1", "type": "box",
-                "bounds_world": {"min": [0, 0, 0], "max": [1, 1, 1]},
-            }],
+            "objects": [
+                {
+                    "id": "box1",
+                    "type": "box",
+                    "bounds_world": {"min": [0, 0, 0], "max": [1, 1, 1]},
+                }
+            ],
             "collision": {},
         }
         result = _objects(spec, contact={}, declared_scale=False)
@@ -51,10 +54,16 @@ class TestObjects:
     def test_duplicate_id_rejected(self):
         spec = {
             "objects": [
-                {"id": "box1", "type": "box",
-                 "bounds_world": {"min": [0, 0, 0], "max": [1, 1, 1]}},
-                {"id": "box1", "type": "box",
-                 "bounds_world": {"min": [2, 2, 2], "max": [3, 3, 3]}},
+                {
+                    "id": "box1",
+                    "type": "box",
+                    "bounds_world": {"min": [0, 0, 0], "max": [1, 1, 1]},
+                },
+                {
+                    "id": "box1",
+                    "type": "box",
+                    "bounds_world": {"min": [2, 2, 2], "max": [3, 3, 3]},
+                },
             ],
             "collision": {},
         }
@@ -72,8 +81,11 @@ class TestObjects:
     def test_too_many_objects_rejected(self):
         spec = {
             "objects": [
-                {"id": f"obj{i}", "type": "box",
-                 "bounds_world": {"min": [i, 0, 0], "max": [i + 1, 1, 1]}}
+                {
+                    "id": f"obj{i}",
+                    "type": "box",
+                    "bounds_world": {"min": [i, 0, 0], "max": [i + 1, 1, 1]},
+                }
                 for i in range(257)
             ],
             "collision": {},
@@ -83,11 +95,14 @@ class TestObjects:
 
     def test_dynamic_box_without_scale_rejected(self):
         spec = {
-            "objects": [{
-                "id": "box1", "type": "box",
-                "bounds_world": {"min": [0, 0, 0], "max": [1, 1, 1]},
-                "physics": {"motion_type": "dynamic", "mass_kg": 1.0},
-            }],
+            "objects": [
+                {
+                    "id": "box1",
+                    "type": "box",
+                    "bounds_world": {"min": [0, 0, 0], "max": [1, 1, 1]},
+                    "physics": {"motion_type": "dynamic", "mass_kg": 1.0},
+                }
+            ],
             "collision": {},
         }
         with pytest.raises(ValueError, match="metric scale"):
@@ -95,11 +110,14 @@ class TestObjects:
 
     def test_dynamic_box_with_scale_accepted(self):
         spec = {
-            "objects": [{
-                "id": "box1", "type": "box",
-                "bounds_world": {"min": [0, 0, 0], "max": [1, 1, 1]},
-                "physics": {"motion_type": "dynamic", "mass_kg": 1.0},
-            }],
+            "objects": [
+                {
+                    "id": "box1",
+                    "type": "box",
+                    "bounds_world": {"min": [0, 0, 0], "max": [1, 1, 1]},
+                    "physics": {"motion_type": "dynamic", "mass_kg": 1.0},
+                }
+            ],
             "collision": {},
         }
         result = _objects(spec, contact={}, declared_scale=True)
@@ -107,10 +125,13 @@ class TestObjects:
 
     def test_valid_button(self):
         spec = {
-            "objects": [{
-                "id": "btn1", "type": "button",
-                "position_world": [0, 0, 1],
-            }],
+            "objects": [
+                {
+                    "id": "btn1",
+                    "type": "button",
+                    "position_world": [0, 0, 1],
+                }
+            ],
             "collision": {},
         }
         result = _objects(spec, contact={}, declared_scale=False)
@@ -119,13 +140,16 @@ class TestObjects:
 
     def test_friction_order_enforced(self):
         spec = {
-            "objects": [{
-                "id": "box1", "type": "box",
-                "bounds_world": {"min": [0, 0, 0], "max": [1, 1, 1]},
-                "physics": {
-                    "contact": {"static_friction": 0.3, "dynamic_friction": 0.5},
-                },
-            }],
+            "objects": [
+                {
+                    "id": "box1",
+                    "type": "box",
+                    "bounds_world": {"min": [0, 0, 0], "max": [1, 1, 1]},
+                    "physics": {
+                        "contact": {"static_friction": 0.3, "dynamic_friction": 0.5},
+                    },
+                }
+            ],
             "collision": {},
         }
         with pytest.raises(ValueError, match="dynamic_friction.*static"):
@@ -136,11 +160,13 @@ class TestFitFloorPlane:
     def test_flat_floor_detected(self):
         rng = np.random.default_rng(42)
         # Create a flat floor at z=0 with some noise.
-        points = np.column_stack([
-            rng.uniform(-5, 5, 200),
-            rng.uniform(-5, 5, 200),
-            rng.normal(0, 0.01, 200),
-        ])
+        points = np.column_stack(
+            [
+                rng.uniform(-5, 5, 200),
+                rng.uniform(-5, 5, 200),
+                rng.normal(0, 0.01, 200),
+            ]
+        )
         result = fit_floor_plane(points, threshold=0.05)
         assert result is not None
         assert abs(result["normal"][2]) > 0.9  # Roughly Z-up
@@ -194,16 +220,20 @@ class TestVoxelProxies:
 class TestNormalizePhysics:
     def test_default_static_box(self):
         result = normalize_physics(
-            None, geometry_type="box",
-            fallback_contact={}, metric_scale_declared=False,
+            None,
+            geometry_type="box",
+            fallback_contact={},
+            metric_scale_declared=False,
         )
         assert result["motion_type"] == "static"
         assert result["contact"]["static_friction"] == 0.8
 
     def test_button_always_dynamic(self):
         result = normalize_physics(
-            None, geometry_type="button",
-            fallback_contact={}, metric_scale_declared=False,
+            None,
+            geometry_type="button",
+            fallback_contact={},
+            metric_scale_declared=False,
             legacy_mass_kg=0.02,
         )
         assert result["motion_type"] == "dynamic"
@@ -212,15 +242,19 @@ class TestNormalizePhysics:
     def test_dynamic_box_requires_mass(self):
         with pytest.raises(ValueError, match="mass_kg"):
             normalize_physics(
-                {"motion_type": "dynamic"}, geometry_type="box",
-                fallback_contact={}, metric_scale_declared=True,
+                {"motion_type": "dynamic"},
+                geometry_type="box",
+                fallback_contact={},
+                metric_scale_declared=True,
             )
 
     def test_dynamic_box_without_scale_rejected(self):
         with pytest.raises(ValueError, match="metric scale"):
             normalize_physics(
-                {"motion_type": "dynamic", "mass_kg": 1.0}, geometry_type="box",
-                fallback_contact={}, metric_scale_declared=False,
+                {"motion_type": "dynamic", "mass_kg": 1.0},
+                geometry_type="box",
+                fallback_contact={},
+                metric_scale_declared=False,
             )
 
     def test_friction_order_enforced(self):
@@ -228,26 +262,37 @@ class TestNormalizePhysics:
             normalize_physics(
                 {"contact": {"static_friction": 0.3, "dynamic_friction": 0.5}},
                 geometry_type="box",
-                fallback_contact={}, metric_scale_declared=False,
+                fallback_contact={},
+                metric_scale_declared=False,
             )
 
     def test_inertia_triangle_inequality(self):
         with pytest.raises(ValueError, match="triangle"):
             normalize_physics(
                 {
-                    "motion_type": "dynamic", "mass_kg": 1.0,
+                    "motion_type": "dynamic",
+                    "mass_kg": 1.0,
                     "inertia_kg_m2": [10.0, 0.1, 0.1],
                 },
                 geometry_type="box",
-                fallback_contact={}, metric_scale_declared=True,
+                fallback_contact={},
+                metric_scale_declared=True,
             )
 
     def test_provenance_tracking(self):
         result = normalize_physics(
-            {"mass_kg": 5.0, "provenance": {
-                "mass_kg": {"source_kind": "measured", "source": "scale", "unit": "kg"},
-            }},
+            {
+                "mass_kg": 5.0,
+                "provenance": {
+                    "mass_kg": {
+                        "source_kind": "measured",
+                        "source": "scale",
+                        "unit": "kg",
+                    },
+                },
+            },
             geometry_type="box",
-            fallback_contact={}, metric_scale_declared=True,
+            fallback_contact={},
+            metric_scale_declared=True,
         )
         assert result["provenance"]["mass_kg"]["source_kind"] == "measured"

@@ -36,9 +36,7 @@ ASSETS_DOC = REPOSITORY_ROOT / "docs" / "PR6_ASSETS.md"
 UPSTREAM_PROBE = Path("/tmp/nerf2physics_probe")
 CLIP_CACHE = Path.home() / ".cache" / "simready_models" / "clip_cache"
 
-COMMIT_PATTERN = re.compile(
-    r"pinned commit:\s*`([0-9a-f]{40})`", re.MULTILINE
-)
+COMMIT_PATTERN = re.compile(r"pinned commit:\s*`([0-9a-f]{40})`", re.MULTILINE)
 
 # Physical plausibility bands (kg/m^3, kg, unitless friction).
 PLAUSIBLE_RANGES = {
@@ -114,9 +112,7 @@ def _verify_upstream_probe(commit: str, expected_hashes: dict[str, str]) -> Path
     )
     actual_commit = result.stdout.strip()
     if actual_commit != commit:
-        pytest.skip(
-            f"upstream probe at {actual_commit}, expected pinned {commit}"
-        )
+        pytest.skip(f"upstream probe at {actual_commit}, expected pinned {commit}")
     mismatches = []
     for filename, expected_sha in expected_hashes.items():
         path = UPSTREAM_PROBE / filename
@@ -339,7 +335,7 @@ def test_clip_regression_head_output_is_plausible(real_assets):
         ("chair", [400.0, 700.0]),
         ("floor", [2000.0, 2500.0]),
     ]
-    train_W, train_y = [], []
+    train_w, train_y = [], []
     rng = np.random.default_rng(20261115)
     for _ in range(100):
         mix = rng.dirichlet(np.ones(len(materials)))
@@ -348,11 +344,13 @@ def test_clip_regression_head_output_is_plausible(real_assets):
         logits = text_features @ patch / 0.1
         w = np.exp(logits - logits.max())
         w /= w.sum()
-        density_mid = sum(w_i * sum(iv) / 2 for w_i, (_, iv) in zip(w, materials))
-        train_W.append(w)
+        density_mid = sum(
+            w_i * sum(iv) / 2 for w_i, (_, iv) in zip(w, materials, strict=False)
+        )
+        train_w.append(w)
         train_y.append(density_mid)
     head = Ridge(alpha=1e-6, fit_intercept=True)
-    head.fit(np.array(train_W), np.array(train_y))
+    head.fit(np.array(train_w), np.array(train_y))
 
     # Probe with the real image feature.
     patch = image_features[0] / np.linalg.norm(image_features[0])
@@ -367,7 +365,9 @@ def test_clip_regression_head_output_is_plausible(real_assets):
     )
 
 
-def test_real_regression_matches_upstream_reference(real_assets, real_request, tmp_path):
+def test_real_regression_matches_upstream_reference(
+    real_assets, real_request, tmp_path
+):
     """Compare against upstream reference outputs, when available.
 
     The staged CLIP cache is a smoke-test sample (single image, four phrases),
@@ -392,8 +392,7 @@ def test_real_regression_matches_upstream_reference(real_assets, real_request, t
     ):
         tolerance = abs(want) * UPSTREAM_TOLERANCE
         assert abs(got - want) <= tolerance, (
-            f"{key} {label}: predicted {got} vs upstream {want} "
-            f"(tolerance {tolerance})"
+            f"{key} {label}: predicted {got} vs upstream {want} (tolerance {tolerance})"
         )
 
 

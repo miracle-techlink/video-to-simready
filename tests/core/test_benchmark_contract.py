@@ -2,7 +2,6 @@
 
 import copy
 import json
-from pathlib import Path
 
 import pytest
 
@@ -137,7 +136,10 @@ def _evaluation_request(root, **overrides):
         "request_id": "eval-0",
         "render_request": {"path": "render.json", "sha256": digest(path)},
         "protocol": {"name": "reconstruction", "version": "1", "sha256": "b" * 64},
-        "candidate_source": {"mode": "external", "reference": _ref(root, "cand.bin", b"c")},
+        "candidate_source": {
+            "mode": "external",
+            "reference": _ref(root, "cand.bin", b"c"),
+        },
         "scorer": {"name": "pixel", "version": "1", "code_sha256": "c" * 64},
         "deadline": "2026-12-31",
     }
@@ -237,7 +239,9 @@ def test_dataset_accepts_derived_fit_frames_with_capture_mapping(tmp_path):
 
 
 def test_view_set_accepts_valid_manifest(tmp_path):
-    assert contract.validate_view_set(_view_set(tmp_path), tmp_path)["kind"] == "view_set"
+    assert (
+        contract.validate_view_set(_view_set(tmp_path), tmp_path)["kind"] == "view_set"
+    )
 
 
 def test_view_set_rejects_duplicate_view_id(tmp_path):
@@ -332,6 +336,4 @@ def test_evaluation_request_rejects_render_request_hash_mismatch(tmp_path):
 def test_validate_manifest_dispatches_and_rejects_unknown_kind(tmp_path):
     with pytest.raises(contract.ContractError, match="Unknown benchmark manifest kind"):
         contract.validate_manifest({"kind": "other"}, tmp_path)
-    assert (
-        contract.validate_manifest(_dataset(tmp_path), tmp_path)["kind"] == "dataset"
-    )
+    assert contract.validate_manifest(_dataset(tmp_path), tmp_path)["kind"] == "dataset"

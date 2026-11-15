@@ -1,6 +1,5 @@
 """Scene preparation edge cases: lighting policy, frozen light detection."""
 
-import numpy as np
 import pytest
 
 from tests.fixtures.scene_preparation import cloud, write_ply
