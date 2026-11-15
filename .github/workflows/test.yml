@@ -78,6 +78,14 @@ jobs:
           python -m pip freeze > ci-results/environment.txt
       - name: Full CPU regression
         run: python -m pytest -q --junitxml=ci-results/pytest.xml
+      - name: Summarize CI scope (executed vs opt-in NOT_RUN)
+        # CPU pass does not imply model/GPU acceptance: report the opt-in
+        # marker populations explicitly as NOT_RUN alongside the JUnit tally.
+        if: ${{ always() }}
+        run: >-
+          python scripts/ci_scope_report.py
+          --junit ci-results/pytest.xml
+          --out ci-results/ci-scope.json
       - name: Preserve test evidence, including failures
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -106,12 +114,24 @@ jobs:
       # file (intentionally not wired up yet — see docs/DEVELOPMENT_PLAN).
       - name: Contract tests (core, geometry, architecture)
         run: >-
+          mkdir -p ci-results &&
           python -m pytest
           tests/core tests/geometry tests/architecture
           -m "not real_model and not gpu"
-          -q
+          -q --junitxml=ci-results/contract.xml
       - name: Fake worker self-tests (synthetic only)
-        run: python -m pytest tests/fixtures/test_fake_workers.py -q
+        run: >-
+          mkdir -p ci-results &&
+          python -m pytest tests/fixtures/test_fake_workers.py -q
+          --junitxml=ci-results/fake-workers.xml
+      - name: Preserve contract evidence, including failures
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cpu-contract-evidence-${{ github.sha }}
+          path: ci-results/
+          if-no-files-found: warn
+          retention-days: 14
 
   package:
     name: package-smoke
@@ -168,7 +188,16 @@ jobs:
           wheel_files=(dist/*.whl)
           test "${#wheel_files[@]}" -eq 1
           export SIMREADY_WHEEL="${{ github.workspace }}/${wheel_files[0]}"
-          python -m pytest tests/architecture/test_wheel_smoke.py -q
+          mkdir -p ci-results
+          python -m pytest tests/architecture/test_wheel_smoke.py -q --junitxml=ci-results/wheel-smoke.xml
+      - name: Preserve package smoke evidence, including failures
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: package-smoke-evidence-${{ github.sha }}
+          path: ci-results/
+          if-no-files-found: warn
+          retention-days: 14
       - name: Bind package and smoke evidence to this commit
         env:
           COMMIT_SHA: ${{ github.sha }}
