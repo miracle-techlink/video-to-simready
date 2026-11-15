@@ -120,7 +120,7 @@ exts."isaacsim.asset.browser".folders = [
 python3 -m venv venv-curobo && source venv-curobo/bin/activate
 pip install torch==2.9.1 --index-url <镜像>    # curobo main 需 torch>=2.7（dlopen libtorch_cuda_linalg.so）
 git clone https://github.com/NVlabs/curobo.git
-cd curobo && git checkout 71ce1726925adfdcc7d0d39dabec5f2d6bb71acd   # 固定到实测提交，避免安装漂移
+git -C curobo checkout 71ce1726925adfdcc7d0d39dabec5f2d6bb71acd   # 固定到实测提交，避免安装漂移
 pip install -e ./curobo[cu12-torch] --no-build-isolation
 # JIT 需把 venv 的 nvidia lib 目录 + torch/lib 加进 LD_LIBRARY_PATH
 ```
