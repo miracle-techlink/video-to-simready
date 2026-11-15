@@ -60,17 +60,13 @@ def mixer_from_hubs(hubs: np.ndarray) -> np.ndarray:
     """Geometry-derived mixer A: wrench = A @ thrusts for hubs (4,3).
 
     Rows: total thrust, tau_x, tau_y (from r_i x f_i over the REAL hub
-    positions), tau_z (declared reaction pattern ccw,cw,cw,ccw alternating
-    on the X quad: rotor0 ccw, rotor1 ccw-hub-rotated, rotor2 cw, rotor3 cw
-    → reaction torques -,+,-,+ by spin sign).
+    positions), tau_z (declared reaction pattern — alternating spin signs on
+    the diagonal pairs, sign convention validated by smoke yaw behavior).
     """
-    torque_rows = []
-    for axis in range(3):
-        row = []
-        for i in range(4):
-            arm = np.zeros(3)
-            arm[axis] = 1.0
-            row.append(float(np.cross(hubs[i], np.array([0.0, 0.0, 1.0])) @ arm))
-        torque_rows.append(row)
-    reaction = [-1.0, 1.0, -1.0, 1.0]  # by prop ccw/cw assignment
-    return np.vstack([np.ones(4), np.array(torque_rows), reaction])
+    ex = np.array([1.0, 0.0, 0.0])
+    ey = np.array([0.0, 1.0, 0.0])
+    up = np.array([0.0, 0.0, 1.0])
+    row_x = [float(np.cross(hubs[i], up) @ ex) for i in range(4)]
+    row_y = [float(np.cross(hubs[i], up) @ ey) for i in range(4)]
+    reaction = [1.0, 1.0, -1.0, -1.0]  # diagonal pairs same spin
+    return np.vstack([np.ones(4), row_x, row_y, reaction])
