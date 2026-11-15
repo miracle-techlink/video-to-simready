@@ -281,7 +281,7 @@ def run_estimation(request_path: PathLike, output_dir: PathLike) -> Path:
             "implementation": "simready_cpu_kernel_port",
             "model_identity": model,
             "parameters": parameters,
-            "new_visual_inference_performed": False,
+            "new_visual_inference_performed": mode == "feature_regression",
             "upstream_revision_assertion": "caller_supplied_with_local_file_hashes",
         },
         "properties": properties,

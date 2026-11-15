@@ -411,7 +411,7 @@ def grounded_segment_image(
             for candidate, predicted_iou in zip(
                 candidates, predicted.iou_scores.flatten().cpu().tolist(), strict=True
             ):
-                candidate["sam_predicted_iou"] = predicted_iou
+                candidate["sam_predicted_iou"] = max(0.0, min(1.0, predicted_iou))
         else:
             raw_masks = np.zeros((0, image.height, image.width), dtype=bool)
         segmentation_s = time.perf_counter() - sam_start
