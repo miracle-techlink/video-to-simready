@@ -70,6 +70,49 @@ def test_hover_thrust_within_envelope():
     assert hover * 2.0 < 4 * SPEC.rotor_max_thrust_n, "TWR must exceed 2 for control"
 
 
+def test_attitude_torque_sign_tilts_toward_desired():
+    """Closed-loop attitude check: torque from a +x tilt demand must rotate
+    the body's z axis TOWARD +x (omega=+y), not away from it."""
+    ctrl = PositionAttitudeController()
+    rot_d = ctrl.desired_rotation(
+        np.array([np.sin(np.radians(10)), 0.0, np.cos(np.radians(10))]), 0.0
+    )
+    rot = np.eye(3)
+    omega = np.zeros(3)
+    dt = 0.002
+    for _ in range(300):
+        torque, _ = ctrl.attitude_torque(rot, rot_d, omega)
+        omega = omega + dt * torque  # I = identity
+        wx, wy, wz = omega
+        dR = np.array([[0, -wz, wy], [wz, 0, -wx], [-wy, wx, 0]]) * dt
+        rot = rot + rot @ dR
+        q, r = np.linalg.qr(rot)
+        rot = q @ np.diag(np.sign(np.diag(r)))
+    z_axis = rot[:, 2]
+    assert z_axis[0] > 0.05, f"body z tilted away from +x: {z_axis}"
+
+
+def _rot_to_quat(rot: np.ndarray) -> np.ndarray:
+    """wxyz quaternion from a rotation matrix (Shepperd's method)."""
+    tr = np.trace(rot)
+    if tr > 0:
+        s = np.sqrt(tr + 1.0) * 2
+        return np.array([0.25 * s, (rot[2, 1] - rot[1, 2]) / s,
+                         (rot[0, 2] - rot[2, 0]) / s, (rot[1, 0] - rot[0, 1]) / s])
+    i = int(np.argmax(np.diag(rot)))
+    if i == 0:
+        s = np.sqrt(1.0 + rot[0, 0] - rot[1, 1] - rot[2, 2]) * 2
+        return np.array([(rot[2, 1] - rot[1, 2]) / s, 0.25 * s,
+                         (rot[0, 1] + rot[1, 0]) / s, (rot[0, 2] + rot[2, 0]) / s])
+    if i == 1:
+        s = np.sqrt(1.0 + rot[1, 1] - rot[0, 0] - rot[2, 2]) * 2
+        return np.array([(rot[0, 2] - rot[2, 0]) / s, (rot[0, 1] + rot[1, 0]) / s,
+                         0.25 * s, (rot[1, 2] + rot[2, 1]) / s])
+    s = np.sqrt(1.0 + rot[2, 2] - rot[0, 0] - rot[1, 1]) * 2
+    return np.array([(rot[1, 0] - rot[0, 1]) / s, (rot[0, 2] + rot[2, 0]) / s,
+                     (rot[1, 2] + rot[2, 1]) / s, 0.25 * s])
+
+
 def test_attitude_error_zero_for_matching_rotation():
     ctrl = PositionAttitudeController()
     quat = np.array([0.95, 0.1, -0.2, 0.2])

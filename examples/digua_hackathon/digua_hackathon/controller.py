@@ -128,8 +128,7 @@ class PositionAttitudeController:
 
         rot = self.rotation_matrix(quat_wxyz)
         rot_d = self.desired_rotation(z_des, ref_yaw)
-        e_rot = self.attitude_error_vee(rot_d @ rot.T - rot @ rot_d.T)
-        torque = -self.kp_att * e_rot - self.kd_att * angular_velocity_body
+        torque, e_rot = self.attitude_torque(rot, rot_d, angular_velocity_body)
 
         thrusts, saturated = self.mixer(total, torque)
         wrench = self.wrench_from_thrusts(thrusts)
@@ -141,6 +140,17 @@ class PositionAttitudeController:
             "position_error_m": float(np.linalg.norm(ref_position - position)),
             "saturated": bool(saturated),
         }
+
+    def attitude_torque(
+        self, rot: np.ndarray, rot_d: np.ndarray, angular_velocity_body: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """PD attitude torque toward rot_d; returns (torque, attitude_error).
+
+        Sign verified by unit test: for Rd=Ry(+theta) from identity this must
+        yield +y torque (omega=+y tilts body z toward +x, matching Rd).
+        """
+        e_rot = self.attitude_error_vee(rot_d @ rot.T - rot @ rot_d.T)
+        return self.kp_att * e_rot - self.kd_att * angular_velocity_body, e_rot
 
     def mixer(
         self, total_thrust: float, torque: np.ndarray
