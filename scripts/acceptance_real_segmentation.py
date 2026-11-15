@@ -470,8 +470,10 @@ def greedy_match(
 ) -> dict[str, Any]:
     """Frozen rule: class-restricted greedy on (-IoU, gt_index, pred_index).
 
-    Cross-class pairs never form; unmatched GT are FN, unmatched predictions
-    (including category 'unknown') are FP. Empty prediction list => all FN.
+    Only pairs with IoU >= tau may bind — a pair below tau leaves both sides
+    unmatched (GT -> FN, prediction -> FP), per PROTOCOL.md §4. Cross-class
+    pairs never form; unmatched predictions (including category 'unknown')
+    are FP. Empty prediction list => all FN.
     """
     pairs = []
     for gi, g in enumerate(gt):
@@ -484,11 +486,11 @@ def greedy_match(
     taken_p: set[int] = set()
     matches = []
     for iou, gi, pi in pairs:
-        if gi in taken_g or pi in taken_p:
+        if iou < tau or gi in taken_g or pi in taken_p:
             continue
         taken_g.add(gi)
         taken_p.add(pi)
-        matches.append({"gt": gi, "pred": pi, "iou": iou, "tp": iou >= tau})
+        matches.append({"gt": gi, "pred": pi, "iou": iou, "tp": True})
     return {
         "tau": tau,
         "matches": matches,
@@ -560,27 +562,69 @@ def census(gt: list[dict[str, Any]], pred: list[dict[str, Any]],
     }
 
 
+def _score_order_status(gt: list[dict[str, Any]], pred: list[dict[str, Any]],
+                        tau: float) -> list[dict[str, Any]]:
+    """Per-image score-order claiming for the PR sweep (descriptor path).
+
+    Predictions rank by (-score, index); each claims its highest-IoU
+    unclaimed same-class GT if IoU >= tau. A prediction's TP status is then
+    fixed, so the pooled score sweep is monotone (adding predictions never
+    removes earlier TPs). Primary matching stays greedy_match by -IoU.
+    """
+    ranked = sorted(range(len(pred)), key=lambda i: (-(pred[i].get("score") or 0.0), i))
+    claimed: set[int] = set()
+    rows = [None] * len(pred)
+    for pi in ranked:
+        p = pred[pi]
+        best_iou, best_gi = 0.0, None
+        for gi, g in enumerate(gt):
+            if gi in claimed or g["category"] != p["category"]:
+                continue
+            v = mask_iou(g["mask"], p["mask"])
+            if v > best_iou:
+                best_iou, best_gi = v, gi
+        if best_gi is not None and best_iou >= tau:
+            claimed.add(best_gi)
+            rows[pi] = {"score": p.get("score"), "is_tp": True, "iou": best_iou}
+        else:
+            rows[pi] = {"score": p.get("score"), "is_tp": False, "iou": None}
+    return rows
+
+
 def ap_sweep(gt: list[dict[str, Any]], pred: list[dict[str, Any]], tau: float) -> dict[str, Any]:
     """Score-ranked PR sweep + all-point AP with precision envelope.
 
-    Descriptor only — flagged small_sample_ap_unstable. Deterministic tie
-    handling: stable sort on -score, pred list order preserved.
+    gt/pred may pool several images; rows carry image_id when multi-image and
+    are grouped per image before mask comparisons (masks from different
+    images are never compared). Descriptor only — flagged
+    small_sample_ap_unstable. Deterministic ties: stable sort on -score.
     """
-    ranked = sorted(range(len(pred)), key=lambda i: (-(pred[i].get("score") or 0.0), i))
+    groups: dict[Any, tuple[list[int], list[int]]] = defaultdict(lambda: ([], []))
+    for gi, g in enumerate(gt):
+        groups[g.get("image_id", 0)][0].append(gi)
+    for pi, p in enumerate(pred):
+        groups[p.get("image_id", 0)][1].append(pi)
+    statuses: list[dict[str, Any]] = []
+    for g_ids, p_ids in groups.values():
+        sub_gt = [gt[i] for i in g_ids]
+        sub_pred = [pred[i] for i in p_ids]
+        statuses.extend(_score_order_status(sub_gt, sub_pred, tau))
+    statuses.sort(key=lambda r: (-(r["score"] or 0.0),))
     points = []
-    for k in range(1, len(ranked) + 1):
-        subset = [pred[i] for i in ranked[:k]]
-        res = greedy_match(gt, subset, lambda g, p: mask_iou(g["mask"], p["mask"]), tau=tau)
-        ntp, nfp = len(res["tp"]), len(res["fp"])
+    n_gt = len(gt)
+    for k in range(1, len(statuses) + 1):
+        prefix = statuses[:k]
+        ntp = sum(1 for r in prefix if r["is_tp"])
+        nfp = k - ntp
         points.append({
             "k": k,
-            "score_cutoff": subset[-1].get("score"),
-            "precision": ntp / (ntp + nfp) if (ntp + nfp) else None,
-            "recall": ntp / len(gt) if gt else None,
+            "score_cutoff": prefix[-1]["score"],
+            "precision": ntp / k,
+            "recall": ntp / n_gt if n_gt else None,
         })
     ap = None
     if points:
-        rec = [p["recall"] or 0.0 for p in points]
+        rec = [p["recall"] if p["recall"] is not None else 0.0 for p in points]
         pre = [p["precision"] if p["precision"] is not None else 0.0 for p in points]
         env = pre[:]
         for i in range(len(pre) - 2, -1, -1):
@@ -664,9 +708,15 @@ def _load_gt(manifest: dict[str, Any]) -> dict[int, list[dict[str, Any]]]:
 
 def _load_predictions(run_dir: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     m = json.loads((run_dir / "manifest.json").read_text())
+
+    def rel(entry: dict[str, Any]) -> str:
+        # production manifests record mask references as {path, sha256, ...}
+        value = entry["mask"]
+        return value["path"] if isinstance(value, dict) else value
+
     derived = []
     for inst in m["instances"]:
-        arr = np.asarray(Image.open(run_dir / inst["mask"]).convert("1"))
+        arr = np.asarray(Image.open(run_dir / rel(inst)).convert("1"))
         derived.append({**inst, "mask": arr})
     raw, seen = [], set()
     for cand in [*m["instances"], *m.get("rejected_candidates", [])]:
@@ -691,7 +741,7 @@ def _evaluate_set(label: str, gt_map: dict[int, list[dict[str, Any]]],
         gt = gt_map[iid]
         pred = pred_map[iid]
         pooled_gt.extend(gt)
-        pooled_pred.extend(pred)
+        pooled_pred.extend({**p, "image_id": iid} for p in pred)
         per_image[str(iid)] = {}
         for tau in tau_set:
             res = greedy_match(gt, pred, lambda g, p: mask_iou(g["mask"], p["mask"]), tau=tau)
@@ -723,13 +773,29 @@ def _evaluate_set(label: str, gt_map: dict[int, list[dict[str, Any]]],
     per_class: dict[str, dict[str, Any]] = {}
     ap: dict[str, Any] = {}
     for cat in QUERY_CATEGORIES:
-        gt_c = [g for g in pooled_gt if g["category"] == cat]
-        pred_c = [p for p in pooled_pred if p["category"] == cat]
         per_class[cat] = {}
         for tau in tau_set:
-            res = greedy_match(gt_c, pred_c, lambda g, p: mask_iou(g["mask"], p["mask"]), tau=tau)
-            per_class[cat][f"tau_{tau}"] = census(gt_c, pred_c, res)
-        ap[cat] = ap_sweep(gt_c, pred_c, TAU_PRIMARY)
+            agg = {"tp": 0, "fp": 0, "fn": 0, "iou_values": []}
+            for entry in image_entries:
+                iid = entry["image_id"]
+                gt_c = [g for g in gt_map[iid] if g["category"] == cat]
+                pred_c = [p for p in pred_map[iid] if p["category"] == cat]
+                res = greedy_match(gt_c, pred_c, lambda g, p: mask_iou(g["mask"], p["mask"]), tau=tau)
+                cen = census(gt_c, pred_c, res)
+                agg["tp"] += cen["tp"]
+                agg["fp"] += cen["fp"]
+                agg["fn"] += cen["fn"]
+                agg["iou_values"].extend(cen["matched_iou"]["values"])
+            per_class[cat][f"tau_{tau}"] = {
+                "tp": agg["tp"], "fp": agg["fp"], "fn": agg["fn"],
+                "precision": agg["tp"] / (agg["tp"] + agg["fp"]) if (agg["tp"] + agg["fp"]) else None,
+                "recall": agg["tp"] / (agg["tp"] + agg["fn"]) if (agg["tp"] + agg["fn"]) else None,
+                "f1": (2 * agg["tp"] / (2 * agg["tp"] + agg["fp"] + agg["fn"])) if (2 * agg["tp"] + agg["fp"] + agg["fn"]) else None,
+                "matched_iou_mean": float(np.mean(agg["iou_values"])) if agg["iou_values"] else None,
+            }
+        gt_pool = [g for g in pooled_gt if g["category"] == cat]
+        pred_pool = [p for p in pooled_pred if p["category"] == cat]
+        ap[cat] = ap_sweep(gt_pool, pred_pool, TAU_PRIMARY)
     unknowns = [p for p in pooled_pred if p["category"] == "unknown"]
     return {
         "per_image": per_image,
