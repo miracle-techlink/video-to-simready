@@ -13,6 +13,28 @@ from simready.execution.processes.local import ProcessCancelledError, run_proces
 
 DEFAULT_IMAGE = "simready-isaac-core:6.1.0"
 OWNERSHIP_LABEL = "org.simready.launch"
+# Bind-mount targets used by container_command; kept beside it so the table
+# lives in exactly one place.
+CONTAINER_MOUNTS = ("/workspace", "/assets", "/output")
+
+
+def container_path(host_path, *, repo, assets, output):
+    """Map a host path to its in-container location, or None if unmounted.
+
+    The container mounts repo/assets/output at CONTAINER_MOUNTS, so a host
+    path under one of those trees is addressable in-container at the mapped
+    target; anything else is invisible to the worker and must not be handed
+    to it (returning None lets callers fail loudly instead of guessing).
+    """
+    host_path = Path(host_path).resolve()
+    for source, target in zip(
+        validate_paths(repo, assets, output), CONTAINER_MOUNTS, strict=True
+    ):
+        if host_path == source:
+            return target
+        if host_path.is_relative_to(source):
+            return f"{target}/{host_path.relative_to(source).as_posix()}"
+    return None
 
 
 def validate_paths(repo, assets, output):

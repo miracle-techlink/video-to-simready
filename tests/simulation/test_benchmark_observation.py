@@ -1,5 +1,6 @@
 """Benchmark observation worker: contract validation, receipt layout, failure semantics."""
 
+import copy
 import json
 
 import pytest
@@ -10,7 +11,28 @@ from simready.core.benchmark_contract import (
 )
 
 
-def _view_set_manifest():
+def _view_set_manifest(view_ids=("front", "side")):
+    ids = tuple(view_ids)
+    if ids == ("front", "side"):
+        return _view_set_default_manifest()
+    template = _view_set_default_manifest()["views"]
+    views = []
+    for index, view_id in enumerate(ids):
+        view = copy.deepcopy(template[index % len(template)])
+        view["view_id"] = view_id
+        view["camera_evidence"]["path"] = f"cam_{view_id.replace(' ', '_')}.json"
+        views.append(view)
+    return {
+        "kind": "view_set",
+        "schema_version": 1,
+        "view_set_id": "vs-1",
+        "coordinate_frame": "world",
+        "unit": "m",
+        "views": views,
+    }
+
+
+def _view_set_default_manifest():
     return {
         "kind": "view_set",
         "schema_version": 1,
@@ -62,11 +84,11 @@ def _write_view_set(tmp_path, manifest=None):
     return path
 
 
-def _write_render_request(tmp_path, **overrides):
+def _write_render_request(tmp_path, *, view_ids=("front", "side"), **overrides):
     """Write a minimal valid render request manifest."""
     scene_file = tmp_path / "scene.usda"
     scene_file.write_text("#usda 1.0\n")
-    view_set_file = _write_view_set(tmp_path)
+    view_set_file = _write_view_set(tmp_path, _view_set_manifest(view_ids))
     reconstruction_file = tmp_path / "reconstruction.json"
     reconstruction_file.write_text(json.dumps({"schema_version": 1}))
 
@@ -405,13 +427,13 @@ def _populate(name, module, state):
             return state["stage"]
 
     class _Stage:
-        def SetEditTarget(self, layer):  # noqa: N802 USD API
+        def SetEditTarget(self, layer):  # noqa: N802
             state["journal"].append(("stage:edit-target",))
 
         def GetSessionLayer(self):  # noqa: N802 USD API
             return object()
 
-        def Traverse(self):  # noqa: N802 USD API
+        def Traverse(self):  # noqa: N802
             return iter(())
 
     if name == "isaacsim":
@@ -501,14 +523,28 @@ def kit_env(monkeypatch):
         sys.modules.pop(name, None)
 
 
-def _write_worker_plan(tmp_path):
-    req_path = _write_render_request(tmp_path)
-    vs_path = tmp_path / "view_set.json"
+def _write_worker_plan(tmp_path, *, view_ids=("front", "side")):
+    """Bundle manifests in their own root and write a schema-2 worker plan."""
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    req_path = _write_render_request(bundle, view_ids=view_ids)
+    vs_path = bundle / "view_set.json"
+    out = tmp_path / "worker-out"
     plan = {
-        "render_request": json.loads(req_path.read_text()),
-        "view_set": json.loads(vs_path.read_text()),
+        "schema_version": 2,
+        "kind": "observation_plan",
+        "request_root": str(bundle),
+        "render_request": {
+            "path": "render_request.json",
+            "sha256": digest(req_path),
+        },
+        "view_set_root": str(bundle),
+        "view_set": {"path": "view_set.json", "sha256": digest(vs_path)},
+        "output_dir": str(out),
         "mode": "rgb",
         "want_depth": False,
+        "embedded_render_request": json.loads(req_path.read_text()),
+        "embedded_view_set": json.loads(vs_path.read_text()),
     }
     plan_path = tmp_path / "observation_plan.json"
     write_json(plan_path, plan)
@@ -573,7 +609,9 @@ class TestWorkerLaunchPath:
 
         _stub_capture(monkeypatch)
         plan_path = _write_worker_plan(tmp_path)
-        rc = main(["worker", "--plan", str(plan_path), "--out", str(tmp_path / "out")])
+        rc = main(
+            ["worker", "--plan", str(plan_path), "--out", str(tmp_path / "worker-out")]
+        )
         assert rc == 0
         journal = kit_env["journal"]
         app_at = next(i for i, e in enumerate(journal) if e[0] == "app:create")
@@ -606,7 +644,7 @@ class TestWorkerLaunchPath:
         import simready.execution.workers.isaac_launcher as launcher
 
         monkeypatch.setattr(launcher, "launch_worker", _fake_launch_worker)
-        run_benchmark_observation(plan, backend="docker")
+        run_benchmark_observation(plan, backend="local")
         argv = captured["argv"]
         assert argv[:3] == [
             "-m",
@@ -647,10 +685,10 @@ class TestWorkerLaunchPath:
 
         # Negative: unresolved layer must abort before rendering.
         kit_env["unresolved"] = ["missing_cabinet.usd"]
-        out2 = tmp_path / "worker-out-unresolved"
-        rc = main(["worker", "--plan", str(plan_path), "--out", str(out2)])
+        (out / "receipt.json").unlink(missing_ok=True)
+        rc = main(["worker", "--plan", str(plan_path), "--out", str(out)])
         assert rc == 1
-        failure = json.loads((out2 / "failure.json").read_text())
+        failure = json.loads((out / "failure.json").read_text())
         assert "missing_cabinet.usd" in failure["error"]
 
     def test_cli_help_needs_no_isaac(self, tmp_path):
@@ -675,3 +713,257 @@ class TestWorkerLaunchPath:
         )
         assert proc.returncode == 0, proc.stderr.decode()
         assert b"worker" in proc.stdout
+
+
+class TestWorkerManifestRootAndExitCodes:
+    """F-GPU-6/7: manifest roots survive plan->worker; exit codes honest."""
+
+    def test_production_chain_with_distinct_cwd_input_output(
+        self, tmp_path, kit_env, monkeypatch
+    ):
+        """cwd != input != output: real plan->run->worker with only the Isaac
+        execution boundary stubbed; receipts keep original view ids."""
+        from simready.simulation.benchmark_observation import (
+            main,
+            plan_benchmark_observation,
+            run_benchmark_observation,
+        )
+
+        repo = tmp_path / "repo"
+        (repo / "bundle").mkdir(parents=True)
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        monkeypatch.chdir(elsewhere)
+
+        bundle = repo / "bundle"
+        req_path = _write_render_request(
+            bundle, view_ids=("view-0", "view_0", "0start", "sp ace")
+        )
+        vs_path = bundle / "view_set.json"
+        first_evidence = json.loads(vs_path.read_text())["views"][0]["camera_evidence"][
+            "path"
+        ]
+        frozen = {
+            "request": digest(req_path),
+            "view_set": digest(vs_path),
+            "scene": digest(bundle / "scene.usda"),
+            "evidence": digest(bundle / first_evidence),
+        }
+        out_dir = tmp_path / "run-out"
+
+        captured = {}
+
+        def _capture_argv(worker, **kwargs):
+            captured["argv"] = list(worker)
+            return {"returncode": 0}
+
+        import simready.execution.workers.isaac_launcher as launcher
+
+        monkeypatch.setattr(launcher, "launch_worker", _capture_argv)
+
+        plan = plan_benchmark_observation(req_path, vs_path, out_dir)
+        run_benchmark_observation(plan, backend="local", repo=repo, assets=repo)
+
+        # Execute the exact production argv through main() from a foreign cwd.
+        _stub_capture(monkeypatch)
+        rc = main(captured["argv"][2:])
+        assert rc == 0, captured["argv"]
+        receipt = json.loads((out_dir / "receipt.json").read_text())
+        assert [v["view_id"] for v in receipt["views"]] == [
+            "view-0",
+            "view_0",
+            "0start",
+            "sp ace",
+        ]
+        assert receipt["completed"] == receipt["expected"] == 4
+        # Nothing frozen was rewritten by planning/execution.
+        assert digest(req_path) == frozen["request"]
+        assert digest(vs_path) == frozen["view_set"]
+        assert digest(bundle / "scene.usda") == frozen["scene"]
+        assert digest(bundle / first_evidence) == frozen["evidence"]
+        # app.close(0) only after the complete receipt.
+        assert kit_env["journal"][-1] == ("app:close", 0)
+
+    def test_docker_backend_maps_plan_and_roots_into_container(
+        self, tmp_path, monkeypatch
+    ):
+        """Docker argv and plan roots use /workspace,/assets,/output mounts."""
+        from simready.simulation.benchmark_observation import (
+            plan_benchmark_observation,
+            run_benchmark_observation,
+        )
+
+        repo = tmp_path / "repo"
+        assets = tmp_path / "assets"
+        out_dir = tmp_path / "out"
+        assets.mkdir()
+        out_dir.mkdir()
+        bundle = repo / "bundle"
+        bundle.mkdir(parents=True)
+        req_path = _write_render_request(bundle)
+        vs_path = bundle / "view_set.json"
+        captured = {}
+
+        def _capture_argv(worker, **kwargs):
+            captured["argv"] = list(worker)
+            return {"returncode": 0}
+
+        import simready.execution.workers.isaac_launcher as launcher
+
+        monkeypatch.setattr(launcher, "launch_worker", _capture_argv)
+        plan = plan_benchmark_observation(req_path, vs_path, out_dir)
+        run_benchmark_observation(plan, backend="docker", repo=repo, assets=assets)
+        argv = captured["argv"]
+        assert argv[argv.index("--plan") + 1] == "/output/observation_plan.json"
+        assert argv[argv.index("--out") + 1] == "/output"
+        plan_data = json.loads((out_dir / "observation_plan.json").read_text())
+        assert plan_data["request_root"] == "/workspace/bundle"
+        assert plan_data["view_set_root"] == "/workspace/bundle"
+        assert plan_data["output_dir"] == "/output"
+
+    def test_docker_backend_rejects_unmounted_worker_inputs(
+        self, tmp_path, monkeypatch
+    ):
+        """Inputs outside repo/assets/output are invisible in-container: fail
+        loudly at launch, not inside the container."""
+        from simready.simulation.benchmark_observation import (
+            plan_benchmark_observation,
+            run_benchmark_observation,
+        )
+
+        repo = tmp_path / "repo"
+        assets = tmp_path / "assets"
+        out_dir = tmp_path / "out"
+        repo.mkdir()
+        assets.mkdir()
+        out_dir.mkdir()
+        stray = tmp_path / "stray"
+        stray.mkdir()
+        req_path = _write_render_request(stray)
+        vs_path = stray / "view_set.json"
+        plan = plan_benchmark_observation(req_path, vs_path, out_dir)
+        with pytest.raises(ValueError, match="invisible to the docker"):
+            run_benchmark_observation(plan, backend="docker", repo=repo, assets=assets)
+
+    def test_v1_plan_without_roots_rejected(self, tmp_path, kit_env, monkeypatch):
+        """Old embedded-only plans fail loudly instead of guessing a root."""
+        from simready.simulation.benchmark_observation import main
+
+        req_path = _write_render_request(tmp_path)
+        vs_path = tmp_path / "view_set.json"
+        legacy = {
+            "render_request": json.loads(req_path.read_text()),
+            "view_set": json.loads(vs_path.read_text()),
+            "mode": "rgb",
+            "want_depth": False,
+        }
+        plan_path = tmp_path / "legacy_plan.json"
+        write_json(plan_path, legacy)
+        with pytest.raises(ValueError, match="schema_version=2"):
+            main(["worker", "--plan", str(plan_path), "--out", str(tmp_path / "o")])
+
+    def test_manifest_drift_rejected(self, tmp_path, kit_env, monkeypatch):
+        """Manifest file changing after planning must fail hash verification."""
+        from simready.simulation.benchmark_observation import main
+
+        plan_path = _write_worker_plan(tmp_path)
+        # Drift the view set file after the plan froze its hash.
+        vs = json.loads((tmp_path / "bundle" / "view_set.json").read_text())
+        vs["views"][0]["view_id"] = "drifted"
+        write_json(tmp_path / "bundle" / "view_set.json", vs)
+        with pytest.raises(ValueError, match="hash drift"):
+            main(
+                [
+                    "worker",
+                    "--plan",
+                    str(plan_path),
+                    "--out",
+                    str(tmp_path / "worker-out"),
+                ]
+            )
+
+    def test_partial_capture_fails_with_nonzero_close_and_rc(
+        self, tmp_path, kit_env, monkeypatch
+    ):
+        """A view failing mid-run must produce rc!=0, failure.json and a
+        nonzero app.close even though earlier views succeeded."""
+        import simready.simulation.benchmark_observation as bo
+        from simready.simulation.benchmark_observation import main
+
+        plan_path = _write_worker_plan(tmp_path)
+        _stub_capture(monkeypatch)
+        stub_capture = bo._capture_single_view
+        calls = {"n": 0}
+
+        def _flaky(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise RuntimeError("view 1 capture exploded")
+            return stub_capture(*args, **kwargs)
+
+        monkeypatch.setattr(bo, "_capture_single_view", _flaky)
+        out = tmp_path / "worker-out"
+        rc = main(["worker", "--plan", str(plan_path), "--out", str(out)])
+        assert rc == 1
+        failure = json.loads((out / "failure.json").read_text())
+        assert "capture exploded" in failure["error"]
+        assert not (out / "receipt.json").exists()
+        assert kit_env["journal"][-1] == ("app:close", 1)
+
+    def test_view_id_prim_mapping_legal_and_injective(
+        self, tmp_path, kit_env, monkeypatch
+    ):
+        """Contract-legal ids (hyphens, leading digits, spaces) map to legal,
+        distinct USD prims; receipts keep the original ids."""
+        from simready.simulation.benchmark_observation import main
+
+        plan_path = _write_worker_plan(
+            tmp_path, view_ids=("view-0", "view_0", "0start", "sp ace")
+        )
+        scopes = []
+        import numpy as np
+
+        import simready.simulation.benchmark_observation as bo
+
+        def _camera(stage, settings, scope_path=None):
+            scopes.append(scope_path)
+            return f"{scope_path}/cam"
+
+        monkeypatch.setattr(bo, "_create_observation_camera", _camera)
+
+        def _capture(
+            rep,
+            camera_path,
+            width,
+            height,
+            want_depth,
+            app,
+            warmup,
+            subframes,
+            attempts,
+            stage_units,
+            capture_mode,
+        ):
+            return (np.full((height, width, 4), 90, dtype=np.uint8), None, {}, 1)
+
+        monkeypatch.setattr(bo, "_capture_single_view", _capture)
+        monkeypatch.setattr(
+            bo, "_validate_capture_result", lambda rgb, depth, capture_mode: None
+        )
+        rc = main(
+            ["worker", "--plan", str(plan_path), "--out", str(tmp_path / "worker-out")]
+        )
+        assert rc == 0
+        import re
+
+        for scope in scopes:
+            prim = scope.rsplit("/", 1)[-1]
+            assert re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", prim), scope
+        assert len(set(scopes)) == len(scopes), scopes
+        receipt = json.loads((tmp_path / "worker-out" / "receipt.json").read_text())
+        assert [v["view_id"] for v in receipt["views"]] == [
+            "view-0",
+            "view_0",
+            "0start",
+            "sp ace",
+        ]
