@@ -8,7 +8,7 @@
 |---|---|
 | `main` | 核心流水线、baseline 接入、资产与物性、独立验收、执行设施、Isaac Sim 部署及必要测试 |
 | [`aloho-hackson`](https://github.com/miracle-techlink/video-to-simready/tree/aloho-hackson) | 分离前的完整版本：Aholo 黑客松、专用机器人任务、Agent 修复／经验、研究代码、视频物料与历史报告（历史存档，不再演进） |
-| [`feat/digua-hackathon-drone-substation`](https://github.com/miracle-techlink/video-to-simready/tree/feat/digua-hackathon-drone-substation) | 无人机专用场景／控制／任务；核心 pipeline 从 main 同步，通用改动先回 main |
+| `feat/digua-hackathon-drone-substation` | 无人机专用场景／控制／任务；核心 pipeline 从 main 同步，通用改动先回 main |
 
 main 保留 `artifact`、`command`、`aholo` 重建后端。Aholo 云端模型由服务方提供，本仓库实现客户端与下游处理；其他算法通过冻结输入、环境身份和统一 bundle 接入。
 
