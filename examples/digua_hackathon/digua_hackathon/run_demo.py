@@ -112,7 +112,7 @@ def _compose_stage(stage_path: Path, start_position: tuple[float, float, float])
     stage.GetRootLayer().Save()
     return {
         "path": str(stage_path),
-        "drone_prim_path": "/World/Drone/Quadcopter",
+        "drone_prim_path": "/World/Drone",
         "drone_start_position_m": list(start_position),
     }
 
@@ -454,7 +454,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--mode", choices=["smoke", "record"], default="smoke")
     parser.add_argument("--generate-assets", action="store_true")
-    parser.add_argument("--drone-path", default="/World/Drone/Quadcopter")
+    parser.add_argument("--drone-path", default="/World/Drone")
     args = parser.parse_args(argv)
     args.out = args.out.resolve()
     if args.generate_assets:

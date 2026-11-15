@@ -30,23 +30,32 @@ from .layout import (
 GENERATOR_VERSION = "digua-hackathon-drone v1"
 
 
+def _set_display_color(prim, color) -> None:
+    """Author primvars:displayColor directly (DisplayColorAPI removed in USD 0.26)."""
+    from pxr import Gf, Sdf
+
+    attr = prim.CreateAttribute(
+        "primvars:displayColor", Sdf.ValueTypeNames.Color3fArray, True
+    )
+    attr.Set([Gf.Vec3f(*color)])
+
+
+
 def _add_box(stage, parent_path: str, name: str, prim: Box) -> None:
-    from pxr import Gf, Sdf, Usd, UsdGeom
+    from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics
 
     path = f"{parent_path}/{name}"
     cube = UsdGeom.Cube.Define(stage, path)
     cube.CreateSizeAttr(1.0)
     cube.AddTranslateOp().Set(Gf.Vec3f(*prim.center))
     cube.AddScaleOp().Set(Gf.Vec3f(*prim.size))
-    UsdGeom.DisplayColorAPI(cube.GetPrim()).SetDisplayColor(
-        [Gf.Vec3f(*prim.color)]
-    )
+    _set_display_color(cube.GetPrim(), prim.color)
     if prim.collision:
-        Usd.CollisionAPI.Apply(cube.GetPrim())
+        UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
 
 
 def _add_cylinder(stage, parent_path: str, name: str, prim: Cylinder) -> None:
-    from pxr import Gf, Usd, UsdGeom
+    from pxr import Gf, Usd, UsdGeom, UsdPhysics
 
     path = f"{parent_path}/{name}"
     cyl = UsdGeom.Cylinder.Define(stage, path)
@@ -55,11 +64,9 @@ def _add_cylinder(stage, parent_path: str, name: str, prim: Cylinder) -> None:
     # pxr cylinders are Y-up by default; scene is Z-up
     cyl.AddRotateXOp().Set(90.0)
     cyl.AddTranslateOp().Set(Gf.Vec3f(*prim.center))
-    UsdGeom.DisplayColorAPI(cyl.GetPrim()).SetDisplayColor(
-        [Gf.Vec3f(*prim.color)]
-    )
+    _set_display_color(cyl.GetPrim(), prim.color)
     if prim.collision:
-        Usd.CollisionAPI.Apply(cyl.GetPrim())
+        UsdPhysics.CollisionAPI.Apply(cyl.GetPrim())
 
 
 def write_substation_usd(path: Path) -> dict[str, object]:
@@ -76,24 +83,21 @@ def write_substation_usd(path: Path) -> dict[str, object]:
         "no real2sim claim.",
     )
     world = UsdGeom.Scope.Define(stage, "/Substation")
+    stage.SetDefaultPrim(world.GetPrim())
 
     # ground: gravel plane + darker inspection corridor strip
     ground = UsdGeom.Cube.Define(stage, "/Substation/Ground")
     ground.CreateSizeAttr(1.0)
     ground.AddTranslateOp().Set(Gf.Vec3f(0.0, 0.0, -0.05))
     ground.AddScaleOp().Set(Gf.Vec3f(*GROUND_SIZE, 0.1))
-    UsdGeom.DisplayColorAPI(ground.GetPrim()).SetDisplayColor(
-        [Gf.Vec3f(*GRAVEL_COLOR)]
-    )
+    _set_display_color(ground.GetPrim(), GRAVEL_COLOR)
     # static collider: CollisionAPI only (RigidBodyAPI would make it dynamic)
-    Usd.CollisionAPI.Apply(ground.GetPrim())
+    UsdPhysics.CollisionAPI.Apply(ground.GetPrim())
     corridor = UsdGeom.Cube.Define(stage, "/Substation/Corridor")
     corridor.CreateSizeAttr(1.0)
     corridor.AddTranslateOp().Set(Gf.Vec3f(0.0, 9.0, 0.011))
     corridor.AddScaleOp().Set(Gf.Vec3f(GROUND_SIZE[0] - 8.0, CORRIDOR_WIDTH, 0.02))
-    UsdGeom.DisplayColorAPI(corridor.GetPrim()).SetDisplayColor(
-        [Gf.Vec3f(*CORRIDOR_COLOR)]
-    )
+    _set_display_color(corridor.GetPrim(), CORRIDOR_COLOR)
 
     prims = substation_layout()
     counters: dict[str, int] = {}
@@ -110,7 +114,8 @@ def write_substation_usd(path: Path) -> dict[str, object]:
     dome.CreateIntensityAttr(900.0)
     sun = UsdLux.DistantLight.Define(stage, "/Substation/Sun")
     sun.CreateIntensityAttr(550.0)
-    sun.AddRotateOp().Set(Gf.Vec3f(-38.0, 28.0, 0.0))
+    sun.AddRotateXOp().Set(-38.0)
+    sun.AddRotateZOp().Set(28.0)
 
     # physics scene with fixed-step dt (also used by the drone demo run)
     scene = UsdPhysics.Scene.Define(stage, "/Substation/PhysicsScene")
@@ -150,21 +155,22 @@ def write_drone_usd(path: Path) -> dict[str, object]:
         "Rotor spin discs are cosmetic; thrust is applied as forces at rotor hubs.",
     )
     root = UsdGeom.Xform.Define(stage, "/Quadcopter")
+    stage.SetDefaultPrim(root.GetPrim())
     body = UsdGeom.Cube.Define(stage, "/Quadcopter/Body")
     body.CreateSizeAttr(1.0)
     body.AddScaleOp().Set(Gf.Vec3f(*SPEC.body_size))
-    UsdGeom.DisplayColorAPI(body.GetPrim()).SetDisplayColor([Gf.Vec3f(0.85, 0.30, 0.08)])
+    _set_display_color(body.GetPrim(), (0.85, 0.30, 0.08))
     battery = UsdGeom.Cube.Define(stage, "/Quadcopter/Battery")
     battery.CreateSizeAttr(1.0)
     battery.AddTranslateOp().Set(Gf.Vec3f(0.0, 0.0, -0.045))
     battery.AddScaleOp().Set(Gf.Vec3f(0.16, 0.16, 0.05))
-    UsdGeom.DisplayColorAPI(battery.GetPrim()).SetDisplayColor([Gf.Vec3f(0.1, 0.1, 0.1)])
+    _set_display_color(battery.GetPrim(), (0.1, 0.1, 0.1))
     # camera pod under the nose (declared sensor mount, view rendered by child cam)
     pod = UsdGeom.Cube.Define(stage, "/Quadcopter/CameraPod")
     pod.CreateSizeAttr(1.0)
     pod.AddTranslateOp().Set(Gf.Vec3f(0.21, 0.0, -0.055))
     pod.AddScaleOp().Set(Gf.Vec3f(0.08, 0.08, 0.07))
-    UsdGeom.DisplayColorAPI(pod.GetPrim()).SetDisplayColor([Gf.Vec3f(0.05, 0.05, 0.06)])
+    _set_display_color(pod.GetPrim(), (0.05, 0.05, 0.06))
     # FPV camera on the pod mount: looks along body +x with 20 deg down-tilt
     # (USD cameras look down local -z; RotateY(-70deg) yields forward+down)
     fpv = UsdGeom.Camera.Define(stage, "/Quadcopter/FPVCamera")
@@ -181,13 +187,13 @@ def write_drone_usd(path: Path) -> dict[str, object]:
         arm.AddTranslateOp().Set(Gf.Vec3f(*mid))
         arm.AddRotateZOp().Set(float(np.degrees(np.arctan2(ry, rx))))
         arm.AddScaleOp().Set(Gf.Vec3f(arm_len, 0.035, 0.025))
-        UsdGeom.DisplayColorAPI(arm.GetPrim()).SetDisplayColor([Gf.Vec3f(0.2, 0.2, 0.22)])
+        _set_display_color(arm.GetPrim(), (0.2, 0.2, 0.22))
         hub = UsdGeom.Cylinder.Define(stage, f"/Quadcopter/Motor_{i}")
         hub.CreateRadiusAttr(0.035)
         hub.CreateHeightAttr(0.05)
         hub.AddRotateXOp().Set(90.0)
         hub.AddTranslateOp().Set(Gf.Vec3f(rx, ry, 0.035))
-        UsdGeom.DisplayColorAPI(hub.GetPrim()).SetDisplayColor([Gf.Vec3f(0.12, 0.12, 0.13)])
+        _set_display_color(hub.GetPrim(), (0.12, 0.12, 0.13))
         disk = UsdGeom.Cylinder.Define(stage, f"/Quadcopter/RotorDisk_{i}")
         disk.CreateRadiusAttr(SPEC.prop_radius)
         disk.CreateHeightAttr(0.008)
@@ -196,9 +202,7 @@ def write_drone_usd(path: Path) -> dict[str, object]:
         disk.AddRotateXOp().Set(90.0)
         disk.AddTranslateOp().Set(Gf.Vec3f(rx, ry, 0.075))
         disk.AddRotateZOp().Set(0.0)
-        UsdGeom.DisplayColorAPI(disk.GetPrim()).SetDisplayColor(
-            [Gf.Vec3f(0.09, 0.09, 0.10)]
-        )
+        _set_display_color(disk.GetPrim(), (0.09, 0.09, 0.10))
 
     # physics: rigid body root with envelope collision box
     rb = root.GetPrim()
