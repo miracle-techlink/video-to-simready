@@ -14,7 +14,7 @@ main 保留 `artifact`、`command`、`aholo` 重建后端。Aholo 云端模型�
 ## 开发进度（每日更新）
 
 - 日期口径：Asia/Shanghai（北京时间）；提交/合并时间由 GitHub 记录换算。
-- 最近核对：2026-11-15 15:14 CST，远端 main `b25ec48ccb59bbe585c7f7fbf7664371c7dabf71`。
+- 最近核对：2026-11-15 15:22 CST，远端 main `b25ec48ccb59bbe585c7f7fbf7664371c7dabf71`。
 - 记录起点为公开仓库创建日（2026-11-10 15:38 CST），非任何云服务投产日期。无记录的日期仅表示“未找到可核验记录”，不推断当天无人工作。
 
 | 日期 | 新增 / 合入 | 已验证功能与范围（限制） |
@@ -26,7 +26,7 @@ main 保留 `artifact`、`command`、`aholo` 重建后端。Aholo 云端模型�
 | 11-14 | [#14](https://github.com/miracle-techlink/video-to-simready/pull/14) 模块化流水线/阶段恢复/baseline 矩阵/merge-gate/main 绑定 SHA 安装包；[#15](https://github.com/miracle-techlink/video-to-simready/pull/15) 仓库清理；[#16](https://github.com/miracle-techlink/video-to-simready/pull/16) main 核心/专用演示分离；[#17](https://github.com/miracle-techlink/video-to-simready/pull/17)–[#19](https://github.com/miracle-techlink/video-to-simready/pull/19) 工程指南/示例整合/runtime 子层 | CI 侧 merge-gate 与 main 安装包绑定 SHA 交付上线（CPU 范围）；仓库外服务器完成真实门店视频 12 关键帧全新重建→USD→Isaac 巡览（`d65696a`，111,365 高斯点，21:12 CST `checked_at`）——尺度未验证、物性未评估、任务未验证、未修复的诊断性巡览。摘要见 [docs/progress/2026-11-14-acceptance.json](docs/progress/2026-11-14-acceptance.json)（历史验收记录，非当日 main 整链通过；其中 v6 静态修复预览完成日期未单独核实，另见今日“复核历史记录”） |
 | 11-15 | 详见下节 | 详见下节 |
 
-### 2026-11-15（今日，截至 15:14 CST）
+### 2026-11-15（今日，截至 15:22 CST）
 
 **已合入 main**（HEAD [`b25ec48`](https://github.com/miracle-techlink/video-to-simready/commit/b25ec48ccb59bbe585c7f7fbf7664371c7dabf71)）：
 
@@ -56,12 +56,18 @@ main 保留 `artifact`、`command`、`aholo` 重建后端。Aholo 云端模型�
 - [ ] **P1/P2** 以带尺度/位姿/几何参考的真实小数据集（TUM/ScanNet++ 等按许可）验收重建与碰撞空间；未知区域保持未知。完成标准：独立参考下的误差报告；静态导航不以家具精确质量为先决条件。
 - [ ] **P2** 机器人/无人机感知定位→规划避障→控制反馈→巡检覆盖闭环，再做导航/飞行训练与独立任务验收。
 - [ ] **P2** 受控 GPU CI：明确资源/凭据/固定模型镜像与数据/失败证据；服务器自动部署与回滚为后续项，不伪称现有 CD 已包含。
+- [ ] **持续** 按“模块归属”把通用能力（含地瓜等活动分支产出的通用部分）经 review+CI 回归 main；活动分支保留专用场景/航线/演示配置并从 main 同步。完成标准：通用模块无长期滞留活动分支的情况，每次回 main 都有针对性测试与（涉真实的）执行复验。
 
 ### 维护规则
 
 - 合并影响功能、验收或计划的 PR 时，同步更新当日条目（本表由人工维护，未部署自动定时任务）。
 - 一条“已验证”必须绑定实际版本（commit/CI run/产物）；不同版本的验证不得拼成一次全链验收。
 - 没有记录的日子写“未找到可核验记录”，不虚构功能或结果。
+
+### 模块归属（主线目标）
+
+- **通用能力最终进 main**：重建/输入合同/资产打包、GPU worker 与执行路径修复、图像特征提取与缓存身份、通用评估指标/数据验收工具/可复用测试、通用渲染/录制/机器人接口、CI/CD 与工程/进度文档。feature/fix 分支只是临时开发与 PR 入口，不把通用模块规划为只交付活动分支。
+- **活动分支只保留活动内容**（如地瓜黑客松分支）：变电站专用场景布局与资产引用、专用航点/任务/演示参数、活动脚本与录屏索引。活动分支从 main 同步通用实现，不做复制式各自维护，也不整体合并未验收功能。
 
 ## CPU 快速开始
 
