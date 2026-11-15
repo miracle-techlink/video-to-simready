@@ -29,7 +29,12 @@ DEPTH_DOCUMENTATION = (
 
 
 def calibration_to_usd_camera(
-    calibration: dict[str, Any], *, focal_length_mm: float = 21.0
+    calibration: dict[str, Any],
+    *,
+    focal_length_mm: float = 21.0,
+    allow_distortion: bool = False,
+    allow_skew: bool = False,
+    allow_nonsquare_pixels: bool = False,
 ) -> dict[str, Any]:
     """Convert zero-skew OpenCV pinhole calibration to USD camera attributes.
 
@@ -37,13 +42,16 @@ def calibration_to_usd_camera(
     row vectors, whereas input c2w uses columns and right/down/forward axes.
     Non-square pixels are refused because RTX may conform aperture aspect ratio.
     Principal-point shifts use signed USD aperture offsets, not camera motion.
+    ``allow_distortion``, ``allow_skew`` and ``allow_nonsquare_pixels`` relax
+    the default strictness for benchmark cameras that have been undistorted
+    or resampled upstream; the caller must then freeze the new parameters.
     """
     if (
         not isinstance(calibration, dict)
         or type(calibration.get("schema_version")) is not int
         or calibration.get("schema_version") != 1
         or calibration.get("camera_convention") != "opencv_c2w"
-        or calibration.get("distortion") != "none"
+        or (not allow_distortion and calibration.get("distortion") != "none")
     ):
         raise ValueError("An undistorted schema-1 opencv_c2w calibration is required")
     size = calibration.get("image_size")
@@ -65,7 +73,12 @@ def calibration_to_usd_camera(
         intrinsics.shape != (3, 3)
         or not np.isfinite(intrinsics).all()
         or not np.allclose(intrinsics[2], [0, 0, 1], atol=1e-9, rtol=0)
-        or not np.allclose([intrinsics[0, 1], intrinsics[1, 0]], 0, atol=1e-9, rtol=0)
+        or (
+            not allow_skew
+            and not np.allclose(
+                [intrinsics[0, 1], intrinsics[1, 0]], 0, atol=1e-9, rtol=0
+            )
+        )
     ):
         raise ValueError("intrinsics must be a finite zero-skew pinhole matrix")
     fx, fy, cx, cy = (
@@ -78,7 +91,7 @@ def calibration_to_usd_camera(
         raise ValueError(
             "Focal pixels must be positive and principal point inside the image"
         )
-    if not np.isclose(fx, fy, rtol=1e-6, atol=1e-8):
+    if not allow_nonsquare_pixels and not np.isclose(fx, fy, rtol=1e-6, atol=1e-8):
         raise ValueError("This calibrated RTX worker requires square pixels (fx=fy)")
     if (
         type(focal_length_mm) not in (int, float)
@@ -112,6 +125,7 @@ def normalize_camera_z(
     height: int,
     meters_per_unit: float,
     min_valid_fraction: float = 0.05,
+    allowed_meters_per_unit: set[float] | None = None,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """Validate rendered camera-z values and replace invalid/background with zero.
 
@@ -119,14 +133,22 @@ def normalize_camera_z(
     metersPerUnit=1 so numeric world units and declared renderer meters agree;
     it does not certify that the reconstructed geometry has real metric scale.
     Other unit conventions must be validated before extending this boundary.
+    ``allowed_meters_per_unit`` widens the whitelist beyond the default {1.0}
+    for stages that declare a different unit scale.
     """
+    if allowed_meters_per_unit is None:
+        allowed = {1.0}
+    else:
+        allowed = allowed_meters_per_unit
     if (
         type(meters_per_unit) not in (int, float)
         or not math.isfinite(meters_per_unit)
-        or not math.isclose(meters_per_unit, 1.0, rel_tol=0, abs_tol=1e-9)
+        or not any(
+            math.isclose(meters_per_unit, m, rel_tol=0, abs_tol=1e-9) for m in allowed
+        )
     ):
         raise ValueError(
-            "Unverified depth conversion: this worker requires metersPerUnit=1"
+            f"Unverified depth conversion: this worker requires metersPerUnit in {allowed}"
         )
     if type(width) is not int or type(height) is not int or min(width, height) < 1:
         raise ValueError("Depth raster dimensions must be positive integers")
@@ -165,8 +187,124 @@ def _array(data: Any) -> np.ndarray:
     return np.asarray(data["data"] if isinstance(data, dict) else data)
 
 
+def _create_observation_camera(
+    stage: Any,
+    camera_settings: dict[str, Any],
+    scope_path: str = "/SimReadyDepthObservation",
+) -> str:
+    """Author an observation camera prim; returns the camera path."""
+    from pxr import Gf, UsdGeom
+
+    camera_path = scope_path + "/Camera"
+    if stage.GetPrimAtPath(scope_path):
+        raise ValueError(f"Scene already uses reserved {scope_path} scope")
+    camera = UsdGeom.Camera.Define(stage, camera_path)
+    camera.CreateProjectionAttr(UsdGeom.Tokens.perspective)
+    for key, factory in (
+        ("focal_length_mm", camera.CreateFocalLengthAttr),
+        ("horizontal_aperture_mm", camera.CreateHorizontalApertureAttr),
+        ("vertical_aperture_mm", camera.CreateVerticalApertureAttr),
+        ("horizontal_aperture_offset_mm", camera.CreateHorizontalApertureOffsetAttr),
+        ("vertical_aperture_offset_mm", camera.CreateVerticalApertureOffsetAttr),
+    ):
+        factory(camera_settings[key])
+    camera.CreateClippingRangeAttr(Gf.Vec2f(0.001, 10000.0))
+    camera.AddTransformOp().Set(Gf.Matrix4d(camera_settings["usd_transform_row_major"]))
+    return camera_path
+
+
+def _capture_single_view(
+    rep: Any,
+    camera_path: str,
+    width: int,
+    height: int,
+    want_depth: bool,
+    app: Any,
+    warmup_updates: int,
+    subframes: int,
+    capture_attempts: int,
+    stage_units: float,
+    capture_mode: str = "rgbd",
+) -> tuple[np.ndarray, np.ndarray | None, dict[str, Any] | None, int]:
+    """Capture one view; returns (rgb, depth_or_None, statistics_or_None, attempt)."""
+    if capture_mode not in ("rgb", "rgbd"):
+        raise ValueError(f"capture_mode must be 'rgb' or 'rgbd', got {capture_mode!r}")
+    if capture_mode == "rgb" and want_depth:
+        raise ValueError("capture_mode='rgb' conflicts with want_depth=True")
+    if capture_mode == "rgbd" and not want_depth:
+        raise ValueError("capture_mode='rgbd' requires want_depth=True")
+    product = rep.create.render_product(camera_path, (width, height))
+    rgb_annotator = rep.AnnotatorRegistry.get_annotator("rgb")
+    depth_annotator = rep.AnnotatorRegistry.get_annotator("distance_to_image_plane")
+    rgb_annotator.attach([product])
+    if want_depth:
+        depth_annotator.attach([product])
+    for _ in range(warmup_updates):
+        app.update()
+    last_failure = "No capture attempted"
+    for attempt in range(capture_attempts):
+        captured_attempt = attempt + 1
+        rep.orchestrator.step(
+            rt_subframes=subframes, delta_time=0.0, pause_timeline=True
+        )
+        rep.orchestrator.wait_until_complete()
+        rgb = _array(rgb_annotator.get_data()).copy()
+        raw_depth = _array(depth_annotator.get_data()).copy() if want_depth else None
+        try:
+            if (
+                rgb.shape not in {(height, width, 3), (height, width, 4)}
+                or rgb.dtype != np.uint8
+            ):
+                raise ValueError("RGB capture is not a matching uint8 raster")
+            if want_depth:
+                depth, statistics = normalize_camera_z(
+                    raw_depth,
+                    width=width,
+                    height=height,
+                    meters_per_unit=stage_units,
+                )
+            else:
+                depth, statistics = None, None
+            if float(rgb[:, :, :3].std()) < 1.0:
+                raise ValueError("RGB capture is nearly uniform; inspect scene/camera")
+            return (
+                rgb,
+                (depth if want_depth else None),
+                (statistics if want_depth else None),
+                captured_attempt,
+            )
+        except ValueError as error:
+            last_failure = str(error)
+            for _ in range(4):
+                app.update()
+    else:
+        raise ValueError(
+            f"Synchronized RGB{'/depth' if want_depth else ''} capture failed: {last_failure}"
+        )
+
+
+def _validate_capture_result(
+    rgb: np.ndarray | None,
+    depth: np.ndarray | None,
+    capture_mode: str = "rgbd",
+) -> None:
+    """Validate that RGB and optional depth rasters meet capture contract."""
+    if capture_mode not in ("rgb", "rgbd"):
+        raise ValueError(f"capture_mode must be 'rgb' or 'rgbd', got {capture_mode!r}")
+    if capture_mode == "rgbd" and depth is None:
+        raise ValueError("capture_mode='rgbd' requires non-None depth")
+    if rgb is None:
+        raise ValueError("RGB capture is required")
+    if float(rgb[:, :, :3].std()) < 1.0:
+        raise ValueError("RGB capture is nearly uniform; inspect scene/camera")
+
+
 def _capture(
-    args: argparse.Namespace, app: Any, inputs: dict[str, Any]
+    args: argparse.Namespace,
+    app: Any,
+    inputs: dict[str, Any],
+    *,
+    scene_status: str = "repaired",
 ) -> dict[str, Any]:
     """Called only after SimulationApp creation; imports stay inside Isaac."""
     import carb
@@ -174,7 +312,7 @@ def _capture(
     import omni.timeline
     import omni.usd
     from PIL import Image
-    from pxr import Gf, UsdGeom, UsdLux, UsdUtils
+    from pxr import UsdGeom, UsdLux, UsdUtils
 
     started = time.perf_counter()
     omni.kit.app.get_app().get_extension_manager().set_extension_enabled_immediate(
@@ -216,21 +354,7 @@ def _capture(
             "Depth capture currently requires source stage metersPerUnit=1"
         )
     camera_settings = inputs["camera_settings"]
-    camera_path = "/SimReadyDepthObservation/Camera"
-    if stage.GetPrimAtPath("/SimReadyDepthObservation"):
-        raise ValueError("Scene already uses reserved /SimReadyDepthObservation scope")
-    camera = UsdGeom.Camera.Define(stage, camera_path)
-    camera.CreateProjectionAttr(UsdGeom.Tokens.perspective)
-    for key, factory in (
-        ("focal_length_mm", camera.CreateFocalLengthAttr),
-        ("horizontal_aperture_mm", camera.CreateHorizontalApertureAttr),
-        ("vertical_aperture_mm", camera.CreateVerticalApertureAttr),
-        ("horizontal_aperture_offset_mm", camera.CreateHorizontalApertureOffsetAttr),
-        ("vertical_aperture_offset_mm", camera.CreateVerticalApertureOffsetAttr),
-    ):
-        factory(camera_settings[key])
-    camera.CreateClippingRangeAttr(Gf.Vec2f(0.001, 10000.0))
-    camera.AddTransformOp().Set(Gf.Matrix4d(camera_settings["usd_transform_row_major"]))
+    camera_path = _create_observation_camera(stage, camera_settings)
     # Add a neutral light only if the scene contains no light at all.
     added_light = not any(prim.HasAPI(UsdLux.LightAPI) for prim in stage.Traverse())
     if added_light:
@@ -238,45 +362,19 @@ def _capture(
             stage, "/SimReadyDepthObservation/Light"
         ).CreateIntensityAttr(300.0)
     width, height = camera_settings["width"], camera_settings["height"]
-    product = rep.create.render_product(camera_path, (width, height))
-    rgb_annotator = rep.AnnotatorRegistry.get_annotator("rgb")
-    depth_annotator = rep.AnnotatorRegistry.get_annotator("distance_to_image_plane")
-    rgb_annotator.attach([product])
-    depth_annotator.attach([product])
-    for _ in range(args.warmup_updates):
-        app.update()
-    last_failure = "No capture attempted"
-    for attempt in range(args.capture_attempts):
-        captured_attempt = attempt + 1
-        rep.orchestrator.step(
-            rt_subframes=args.subframes, delta_time=0.0, pause_timeline=True
-        )
-        rep.orchestrator.wait_until_complete()
-        rgb = _array(rgb_annotator.get_data()).copy()
-        raw_depth = _array(depth_annotator.get_data()).copy()
-        try:
-            if (
-                rgb.shape not in {(height, width, 3), (height, width, 4)}
-                or rgb.dtype != np.uint8
-            ):
-                raise ValueError("RGB capture is not a matching uint8 raster")
-            depth, statistics = normalize_camera_z(
-                raw_depth,
-                width=width,
-                height=height,
-                meters_per_unit=stage_units,
-            )
-            if float(rgb[:, :, :3].std()) < 1.0:
-                raise ValueError("RGB capture is nearly uniform; inspect scene/camera")
-            break
-        except ValueError as error:
-            last_failure = str(error)
-            for _ in range(4):
-                app.update()
-    else:
-        raise ValueError(f"Synchronized RGB/depth capture failed: {last_failure}")
-    rgb_annotator.detach([product])
-    depth_annotator.detach([product])
+    rgb, depth, statistics, captured_attempt = _capture_single_view(
+        rep,
+        camera_path,
+        width,
+        height,
+        want_depth=True,
+        app=app,
+        warmup_updates=args.warmup_updates,
+        subframes=args.subframes,
+        capture_attempts=args.capture_attempts,
+        stage_units=stage_units,
+        capture_mode="rgbd",
+    )
     for path, expected in inputs["frozen"].items():
         if digest(path) != expected:
             raise ValueError(f"Input changed during capture: {path}")
@@ -303,7 +401,7 @@ def _capture(
             "source_image_sha256": inputs["calibration"]["image_sha256"],
             "scene_sha256": inputs["frozen"][args.scene],
             "renderer_sha256": inputs["worker_sha256"],
-            "evidence": "New synchronized Replicator RGB and distance_to_image_plane from the supplied USD; camera pose/intrinsics reused from the bound source calibration. Repaired scene depth, not real sensor depth.",
+            "evidence": f"New synchronized Replicator RGB and distance_to_image_plane from the supplied USD; camera pose/intrinsics reused from the bound source calibration. {scene_status.capitalize()} scene depth, not real sensor depth.",
             "depth_statistics": statistics,
         }
     )
@@ -333,7 +431,7 @@ def _capture(
         "capture_attempt": captured_attempt,
         "added_fallback_light": added_light,
         "physics_stepped": False,
-        "depth_source": "rendered_repaired_scene_geometry",
+        "depth_source": f"rendered_{scene_status}_scene_geometry",
         "real_sensor_measurement": False,
         "metric_scale_verified": False,
         "semantic_accuracy_validated": False,

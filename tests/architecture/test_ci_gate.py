@@ -10,14 +10,17 @@ from tests.paths import REPOSITORY_ROOT
 
 
 def success():
-    return {name: {"result": "success"} for name in ("static", "test", "package")}
+    return {
+        name: {"result": "success"}
+        for name in ("static", "test", "cpu-contract-tests", "package")
+    }
 
 
 def test_all_required_checks_must_pass():
     require_success(success())
 
 
-@pytest.mark.parametrize("job", ["static", "test", "package"])
+@pytest.mark.parametrize("job", ["static", "test", "cpu-contract-tests", "package"])
 @pytest.mark.parametrize("status", ["failure", "cancelled", "skipped", None])
 def test_incomplete_or_failed_dependency_blocks_merge(job, status):
     results = success()
