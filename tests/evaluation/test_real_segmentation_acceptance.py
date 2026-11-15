@@ -157,6 +157,12 @@ class TestGeometry:
 
 
 class TestGroundTruthConversion:
+    # The rasterizer is matplotlib-based (lazy import, matplotlib.path) and
+    # is pinned in the pyproject test extra so these conversion tests run in
+    # CI. The implementation is deliberately the exact one that produced the
+    # frozen GT masks — swapping it after scores existed would change GT
+    # bytes, which the protocol forbids.
+
     def test_polygon_rasterization_matches_area(self):
         # axis-aligned rectangle polygon; pixel-center sampling
         m = mod._polygon_mask([[2.0, 2.0, 10.0, 2.0, 10.0, 8.0, 2.0, 8.0]], 12, 12)

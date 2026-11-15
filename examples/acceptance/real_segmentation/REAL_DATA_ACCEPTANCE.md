@@ -83,13 +83,21 @@ model revisions + checkpoint sha256 read from each production manifest into
 ## Test coverage of the evaluation code itself
 
 `tests/evaluation/test_real_segmentation_acceptance.py` (23 tests, no
-network/weights): perfect match, empty predictions (vacuous precision,
-nothing skipped), misaligned masks (FN+FP at τ0.5, match at lower τ), wrong
-class (never matches; class-error diagnostic), unknown-category FP,
-one-to-one greedy (no double counting), tie-break determinism, polygon/RLE
-rasterization incl. compressed-RLE refusal, rasterization sanity bounds,
-deterministic selection rule (first-5-ascending, decoys ignored), AP sweep
-monotonic cases, overlay smoke. One real semantics bug was caught by these
-tests before any score existed: greedy pairs below τ initially bound both
-sides (silently neither TP nor FN/FP) — fixed to never bind below τ per
+network/weights/downloads): perfect match, empty predictions (vacuous
+precision, nothing skipped), misaligned masks (FN+FP at τ0.5, match at lower
+τ), wrong class (never matches; class-error diagnostic), unknown-category
+FP, one-to-one greedy (no double counting), tie-break determinism,
+polygon/RLE rasterization incl. compressed-RLE refusal, rasterization sanity
+bounds, deterministic selection rule (first-5-ascending, decoys ignored), AP
+sweep monotonic cases, overlay smoke. One real semantics bug was caught by
+these tests before any score existed: greedy pairs below τ initially bound
+both sides (silently neither TP nor FN/FP) — fixed to never bind below τ per
 PROTOCOL.md §4.
+
+CI note: the polygon-rasterization tests depend on matplotlib (the exact
+rasterizer that produced the frozen GT — deliberately not reimplemented,
+since swapping it after scores existed would change GT bytes, which the
+protocol forbids). `matplotlib>=3.5` is therefore declared in the pyproject
+`test` extra (coordinator-authorized addition) so all 23 tests run in CI.
+No CI job downloads model weights or dataset bytes; the real-model path
+remains an explicit opt-in, separate from this suite.

@@ -17,7 +17,8 @@ Subcommands
   report    Assemble machine-readable summary + markdown report.
 
 The evaluation protocol is frozen in
-examples/acceptance/real_segmentation/PROTOCOL.md (commit a5b80dd, dated
+examples/acceptance/real_segmentation/PROTOCOL.md (commit 57680e2 after
+rebase onto main b25ec48; byte-identical to the pre-inference freeze, dated
 before any prediction existed). No quality threshold is defined; measured
 scores are findings, not pass/fail. Scores are COCO-val in-distribution
 measurements of the perception front-end only — never Starbucks/substation
@@ -53,7 +54,7 @@ ART_DEFAULT = Path(
     "/home/nvidia/algotithm/.simready-collaboration/parallel-followup-20261115/"
     "simready-data-validation/artifacts"
 )
-PROTOCOL_REF = "examples/acceptance/real_segmentation/PROTOCOL.md @ a5b80dd"
+PROTOCOL_REF = "examples/acceptance/real_segmentation/PROTOCOL.md @ 57680e2"
 
 ANN_ZIP_URL = "http://images.cocodataset.org/annotations/annotations_trainval2017.zip"
 ANN_ZIP_ETAG = "f4bbac642086de4f52a3fdda2de5fa2c"
