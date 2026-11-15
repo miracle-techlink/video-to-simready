@@ -284,10 +284,12 @@ def reference_trajectory(t: float) -> tuple[np.ndarray, np.ndarray, str]:
     return p, np.zeros(3), MISSION_WAYPOINTS[-1].label
 
 
-# Smooth reference: first-order tracking of the bang-bang path removes the
-# velocity steps at waypoints so the PD controller (and the video) sees
-# flyable corners instead of 4 m catch-up transients.
+# Smooth reference: first-order tracking of the bang-bang path with speed AND
+# acceleration limits removes the velocity steps at waypoints, so the PD
+# controller (and the video) sees flyable corners instead of catch-up
+# transients beyond the airframe's tilt-limited acceleration.
 _SMOOTH_GAIN = 5.0  # 1/s; steady lag at cruise ~ speed/gain (~1 m)
+_SMOOTH_ACCEL_MS2 = 4.0  # below the controller's tilt-limited ~5.7 m/s^2
 
 
 def _bang_bang_position(t: float) -> np.ndarray:
@@ -301,6 +303,7 @@ def smooth_reference_arrays(dt: float, duration_s: float) -> tuple[np.ndarray, n
     velocities = np.zeros((count, 3))
     labels: list[str] = []
     p = _bang_bang_position(0.0)
+    v_prev = np.zeros(3)
     positions[0] = p
     labels.append(reference_trajectory(0.0)[2])
     for i in range(1, count):
@@ -310,9 +313,14 @@ def smooth_reference_arrays(dt: float, duration_s: float) -> tuple[np.ndarray, n
         speed = np.linalg.norm(v)
         if speed > MISSION_SPEED_MS:
             v *= MISSION_SPEED_MS / speed
+        delta = v - v_prev
+        dv = np.linalg.norm(delta)
+        if dv > _SMOOTH_ACCEL_MS2 * dt:
+            v = v_prev + delta * (_SMOOTH_ACCEL_MS2 * dt / dv)
         p = p + v * dt
         positions[i] = p
         velocities[i] = v
+        v_prev = v
         labels.append(reference_trajectory(t)[2])
     return positions, velocities, labels
 
