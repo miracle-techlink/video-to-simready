@@ -16,10 +16,12 @@ correctly on cases with known answers.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 from PIL import Image
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -142,6 +144,37 @@ class TestCannedCases:
         for _ in range(3):
             res = mod.greedy_match(gt, [p1, p2], MASK_IOU, tau=0.1)
             assert res["tp"][0]["pred"] == 0  # equal IoU+score: lower pred index
+
+    def test_greedy_tie_breaks_on_stable_ids_not_list_order(self):
+        """PROTOCOL.md §4.3: ties resolve on gt/pred ids, so shuffling the
+        same rows cannot change which objects pair (duplicate/identical
+        masks make equal IoU common, so 'floats rarely tie' is not a defense)."""
+        mask_a = box_mask(20, 20, 0, 0, 8, 8)
+        mask_b = box_mask(20, 20, 0, 0, 8, 8)  # identical -> exact IoU tie
+        gt_10 = {**gt_row("chair", mask_a), "ann_id": 10}
+        gt_20 = {**gt_row("chair", mask_b), "ann_id": 20}
+        pred_7 = {
+            **pred_row("chair", box_mask(20, 20, 0, 0, 8, 8)),
+            "asset_id": "chair_0007",
+        }
+        pred_3 = {
+            **pred_row("chair", box_mask(20, 20, 0, 0, 8, 8)),
+            "asset_id": "chair_0003",
+        }
+
+        def pairs_by_id(gt_list, pred_list):
+            res = mod.greedy_match(gt_list, pred_list, MASK_IOU, tau=0.5)
+            return sorted(
+                (gt_list[m["gt"]]["ann_id"], pred_list[m["pred"]]["asset_id"])
+                for m in res["tp"]
+            )
+
+        base = pairs_by_id([gt_10, gt_20], [pred_7, pred_3])
+        assert base == [(10, "chair_0003"), (20, "chair_0007")]
+        # every input permutation yields the identical object pairing
+        assert pairs_by_id([gt_20, gt_10], [pred_3, pred_7]) == base
+        assert pairs_by_id([gt_20, gt_10], [pred_7, pred_3]) == base
+        assert pairs_by_id([gt_10, gt_20], [pred_3, pred_7]) == base
 
 
 class TestGeometry:
@@ -314,6 +347,83 @@ class TestPRSweep:
     def test_empty_predictions_sweep_empty_not_crash(self):
         out = mod.ap_sweep([gt_row("chair", box_mask(8, 8, 0, 0, 4, 4))], [], 0.5)
         assert out["points"] == [] and out["all_point_ap"] is None
+
+
+class TestPredictionEvidenceBinding:
+    """R1 fixes: prediction masks are hash-checked evidence and each run is
+    bound to its dataset entry before anything scores."""
+
+    def _run_dir(self, tmp_path, mask_bytes=None, source_sha=None):
+        run = tmp_path / "runs" / "139"
+        (run / "masks").mkdir(parents=True)
+        mask = box_mask(8, 8, 1, 1, 5, 5)
+        Image.fromarray(mask.astype(np.uint8) * 255).save(run / "masks" / "m.png")
+        if mask_bytes is not None:  # same-size swap AFTER the manifest hash
+            Image.fromarray((~mask).astype(np.uint8) * 255).save(
+                run / "masks" / "m.png"
+            )
+        ref = mod._sha256(run / "masks" / "m.png") if mask_bytes is None else None
+        manifest = {
+            "source_image": {
+                "path": "/dataset/images/x.jpg",
+                "sha256": source_sha or "a" * 64,
+            },
+            "provenance": {"worker_sha256": "w" * 64},
+            "instances": [
+                {
+                    "asset_id": "chair_0000",
+                    "category": "chair",
+                    "mask": {"path": "masks/m.png", "sha256": ref},
+                }
+            ],
+            "rejected_candidates": [],
+        }
+        (run / "manifest.json").write_text(json.dumps(manifest))
+        return run, manifest
+
+    def test_mask_with_stale_recorded_sha_is_rejected(self, tmp_path):
+        run, manifest = self._run_dir(tmp_path)
+        # tamper: same-size mask bytes, manifest keeps the OLD sha256
+        Image.fromarray(np.zeros((8, 8), np.uint8)).save(run / "masks" / "m.png")
+        with pytest.raises(ValueError, match="does not match its manifest-recorded"):
+            mod._load_predictions(run)
+
+    def test_borrowed_manifest_cannot_score_for_another_image(self, tmp_path):
+        run, manifest = self._run_dir(tmp_path, source_sha="b" * 64)
+        entry = {"image_id": 139, "sha256": "a" * 64}
+        with pytest.raises(ValueError, match="source_image sha256 differs"):
+            mod._bind_run(
+                entry,
+                {"exit_code": 0, "image_sha256": "a" * 64},
+                manifest,
+                worker_sha256="w" * 64,
+            )
+
+    def test_bind_run_requires_clean_exit_and_matching_worker(self, tmp_path):
+        _, manifest = self._run_dir(tmp_path, source_sha="a" * 64)
+        entry = {"image_id": 139, "sha256": "a" * 64}
+        with pytest.raises(ValueError, match="exited nonzero"):
+            mod._bind_run(
+                entry,
+                {"exit_code": 1, "image_sha256": "a" * 64},
+                manifest,
+                worker_sha256="w" * 64,
+            )
+        with pytest.raises(ValueError, match="different code"):
+            mod._bind_run(
+                entry,
+                {"exit_code": 0, "image_sha256": "a" * 64},
+                manifest,
+                worker_sha256="x" * 64,
+            )
+        binding = mod._bind_run(
+            entry,
+            {"exit_code": 0, "image_sha256": "a" * 64},
+            manifest,
+            worker_sha256="w" * 64,
+        )
+        assert binding["run_index_exit_code"] == 0
+        assert binding["image_sha256_bound"] == "a" * 64
 
 
 class TestOverlaySmoke:

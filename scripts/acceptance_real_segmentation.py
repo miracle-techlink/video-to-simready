@@ -51,10 +51,6 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-ART_DEFAULT = Path(
-    "/home/nvidia/algotithm/.simready-collaboration/parallel-followup-20261115/"
-    "simready-data-validation/artifacts"
-)
 PROTOCOL_REF = "examples/acceptance/real_segmentation/PROTOCOL.md @ 57680e2"
 
 ANN_ZIP_URL = "http://images.cocodataset.org/annotations/annotations_trainval2017.zip"
@@ -520,6 +516,26 @@ def box_iou(a: list[float], b: list[float]) -> float:
     return inter / union if union > 0 else 0.0
 
 
+def _stable_tie_keys(
+    rows: list[dict[str, Any]], id_field: str
+) -> list[tuple[int, str]]:
+    """Frozen stable tie identities (PROTOCOL.md §4.3).
+
+    Real rows carry ids (GT: ``ann_id``, predictions: ``asset_id``); rows
+    without an id (synthetic fixtures) fall back to positional order and sort
+    after id-bearing rows. Ties on IoU are therefore resolved by stable ids,
+    never by incidental list order.
+    """
+    keys = []
+    for index, row in enumerate(rows):
+        value = row.get(id_field)
+        if value is not None:
+            keys.append((0, str(value)))
+        else:
+            keys.append((1, f"index:{index:09d}"))
+    return keys
+
+
 def greedy_match(
     gt: list[dict[str, Any]],
     pred: list[dict[str, Any]],
@@ -527,20 +543,25 @@ def greedy_match(
     *,
     tau: float,
 ) -> dict[str, Any]:
-    """Frozen rule: class-restricted greedy on (-IoU, gt_index, pred_index).
+    """Frozen rule: class-restricted greedy on (-IoU, gt_id, pred_id).
 
     Only pairs with IoU >= tau may bind — a pair below tau leaves both sides
     unmatched (GT -> FN, prediction -> FP), per PROTOCOL.md §4. Cross-class
     pairs never form; unmatched predictions (including category 'unknown')
-    are FP. Empty prediction list => all FN.
+    are FP. Empty prediction list => all FN. IoU ties break on the stable ids
+    of §4.3 (``ann_id`` / ``asset_id``), so shuffling input order cannot
+    change the pairing; positional fallback exists only for id-less
+    synthetic rows.
     """
+    gt_keys = _stable_tie_keys(gt, "ann_id")
+    pred_keys = _stable_tie_keys(pred, "asset_id")
     pairs = []
     for gi, g in enumerate(gt):
         for pi, p in enumerate(pred):
             if g["category"] != p["category"]:
                 continue
             pairs.append((iou_fn(g, p), gi, pi))
-    pairs.sort(key=lambda t: (-t[0], t[1], t[2]))
+    pairs.sort(key=lambda t: (-t[0], gt_keys[t[1]], pred_keys[t[2]]))
     taken_g: set[int] = set()
     taken_p: set[int] = set()
     matches = []
@@ -783,28 +804,89 @@ def _load_gt(manifest: dict[str, Any]) -> dict[int, list[dict[str, Any]]]:
     return by_image
 
 
+def _checked_mask(run_dir: Path, ref: dict[str, Any], what: str) -> np.ndarray:
+    """Load a run mask only if its bytes match the manifest-recorded sha256.
+
+    Predictions are evidence: a swapped same-size mask file under a stale
+    recorded hash must fail the evaluation, not silently score.
+    """
+    path = run_dir / ref["path"]
+    recorded = ref.get("sha256")
+    if not isinstance(recorded, str) or _sha256(path) != recorded:
+        raise ValueError(
+            f"{what}: mask file {path} does not match its manifest-recorded "
+            f"sha256 ({recorded}); prediction evidence is not trustworthy"
+        )
+    return np.asarray(Image.open(path).convert("1"))
+
+
 def _load_predictions(
     run_dir: Path,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     m = json.loads((run_dir / "manifest.json").read_text())
 
-    def rel(entry: dict[str, Any]) -> str:
+    def mask_ref(entry: dict[str, Any]) -> dict[str, Any]:
         # production manifests record mask references as {path, sha256, ...}
         value = entry["mask"]
-        return value["path"] if isinstance(value, dict) else value
+        return value if isinstance(value, dict) else {"path": value}
 
     derived = []
     for inst in m["instances"]:
-        arr = np.asarray(Image.open(run_dir / rel(inst)).convert("1"))
+        arr = _checked_mask(run_dir, mask_ref(inst), f"instance {inst['asset_id']}")
         derived.append({**inst, "mask": arr})
     raw, seen = [], set()
     for cand in [*m["instances"], *m.get("rejected_candidates", [])]:
         if cand["asset_id"] in seen:
             continue
         seen.add(cand["asset_id"])
-        arr = np.asarray(Image.open(run_dir / cand["raw_mask"]["path"]).convert("1"))
+        arr = _checked_mask(run_dir, cand["raw_mask"], f"raw mask {cand['asset_id']}")
         raw.append({**cand, "mask": arr})
     return derived, raw, m
+
+
+def _bind_run(
+    entry: dict[str, Any],
+    run_record: dict[str, Any] | None,
+    manifest: dict[str, Any],
+    *,
+    worker_sha256: str,
+) -> dict[str, Any]:
+    """Verify a production run really belongs to this dataset entry.
+
+    Binds, before any score is computed: (1) run_index has the image and
+    exited 0; (2) the production manifest's source_image sha256 equals the
+    frozen dataset entry's image sha256 (a same-size manifest borrowed from
+    another image must not score); (3) the manifest's worker sha256 equals
+    the repository's grounded.py digest (code identity). Raises on any
+    mismatch — tampered evidence fails loudly instead of scoring.
+    """
+    if run_record is None:
+        raise ValueError(f"no run_index record for image {entry['image_id']}")
+    if run_record.get("exit_code") != 0:
+        raise ValueError(f"run for image {entry['image_id']} exited nonzero")
+    if run_record.get("image_sha256") != entry["sha256"]:
+        raise ValueError(
+            f"run_index image hash differs from dataset entry for {entry['image_id']}"
+        )
+    source = manifest.get("source_image") or {}
+    if source.get("sha256") != entry["sha256"]:
+        raise ValueError(
+            f"production manifest source_image sha256 differs from dataset "
+            f"entry for image {entry['image_id']}; borrowed or mixed-up run "
+            "evidence must not score"
+        )
+    recorded_worker = (manifest.get("provenance") or {}).get("worker_sha256")
+    if recorded_worker != worker_sha256:
+        raise ValueError(
+            f"production manifest worker sha256 {recorded_worker} != repository "
+            f"grounded.py {worker_sha256}; run was produced by different code"
+        )
+    return {
+        "run_index_exit_code": run_record.get("exit_code"),
+        "image_sha256_bound": source.get("sha256"),
+        "worker_sha256": recorded_worker,
+        "argv": run_record.get("argv"),
+    }
 
 
 def _evaluate_set(
@@ -960,15 +1042,24 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
     art = Path(args.artifacts).resolve()
     manifest = json.loads((art / "dataset" / "input_manifest.json").read_text())
     run_index = json.loads((art / "runs" / "run_index.json").read_text())
+    run_by_image = {r["image_id"]: r for r in run_index["runs"]}
+    worker_path = (
+        REPO_ROOT / "src" / "simready" / "ingestion" / "segmentation" / "grounded.py"
+    )
+    worker_sha256 = _sha256(worker_path)
     gt_map = _load_gt(manifest)
     entries = manifest["images"]
     derived_map, raw_map, prod_manifests = {}, {}, {}
     for entry in entries:
         run_dir = art / "runs" / str(entry["image_id"])
         d, r, pm = _load_predictions(run_dir)
+        binding = _bind_run(
+            entry, run_by_image.get(entry["image_id"]), pm, worker_sha256=worker_sha256
+        )
         derived_map[entry["image_id"]] = d
         raw_map[entry["image_id"]] = r
         prod_manifests[str(entry["image_id"])] = {
+            "binding_verified": binding,
             "worker_sha256": pm["provenance"]["worker_sha256"],
             "models": pm["model"]["components"],
             "parameters": pm["parameters"],
@@ -980,7 +1071,12 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
         "generated_at": _now(),
         "protocol": PROTOCOL_REF,
         "execution_classification": {
-            "predictions": "real_inference_new (production DINO+SAM, CPU)",
+            "predictions": (
+                "real_inference_new (production DINO+SAM, CPU) — verified per "
+                "run: mask files hash-checked against production manifests, "
+                "source_image sha256 bound to the frozen dataset entry, "
+                "run_index exit code 0, worker sha256 == repository grounded.py"
+            ),
             "gt": "gt_official_coco (human annotation, untouched)",
         },
         "gt_totals": {
@@ -1076,7 +1172,14 @@ def cmd_report(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--artifacts", default=str(ART_DEFAULT))
+    parser.add_argument(
+        "--artifacts",
+        required=True,
+        help=(
+            "Lane artifacts root holding dataset/ and runs/; outputs are "
+            "written there. Explicit on purpose — no machine-absolute default."
+        ),
+    )
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("fetch")
     p_run = sub.add_parser("run")

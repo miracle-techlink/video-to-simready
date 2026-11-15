@@ -64,14 +64,54 @@ couch 0.5, dining_table 0.214.
 
 ## Reproduce
 
+`--artifacts` is required and machine-absolute paths are never defaulted —
+point it at your own lane artifacts root.
+
 ```bash
 VENV=<lane venv>  # python with torch-cpu/transformers/numpy/PIL/matplotlib
-$VENV scripts/acceptance_real_segmentation.py fetch      # ~7 MB total download
-$VENV scripts/acceptance_real_segmentation.py run --cpu-threads 2
-$VENV scripts/acceptance_real_segmentation.py evaluate
-$VENV scripts/acceptance_real_segmentation.py report
+ART=<your artifacts root>
+$VENV scripts/acceptance_real_segmentation.py --artifacts $ART fetch      # ~7 MB download
+$VENV scripts/acceptance_real_segmentation.py --artifacts $ART run --cpu-threads 2
+$VENV scripts/acceptance_real_segmentation.py --artifacts $ART evaluate
+$VENV scripts/acceptance_real_segmentation.py --artifacts $ART report
 pytest tests/evaluation/test_real_segmentation_acceptance.py -q
 ```
+
+Note on the committed `input_manifest.frozen.json`: its `path` fields are the
+**historical absolute paths of the original lane run** — kept verbatim as a
+record of what was scored. They are not defaults and not required to exist
+to re-run: `fetch` regenerates the manifest under your `--artifacts` root
+from the official sources (sha256/ETag-verified), and `evaluate` verifies GT
+and prediction bytes by hash wherever they live.
+
+## GT counting note (26 → 24)
+
+The frozen selection rule picked images with ≥3 vocabulary annotations, but
+**scoring uses 24 of the 26 vocabulary GT instances**: image 139 contains two
+tiny chairs (area 210 and 91 px²) below the production pipeline's own
+256 px `min_area_px` floor. Per the frozen protocol these are excluded from
+matching and counted as `gt_below_pipeline_floor` — the pipeline documents
+it cannot emit masks that small, so they are outside the measured operating
+range, not model misses swept under the rug.
+
+## Evidence binding (added after independent review)
+
+Evaluation now refuses to score tampered evidence (counterexamples from the
+review reproduced, then fixed — original run artifacts untouched):
+
+- every prediction mask file (derived and raw) is hash-checked against its
+  production manifest before loading — a same-size swapped mask under a
+  stale recorded sha fails loudly;
+- each run is bound before scoring: run_index exit code 0, run_index image
+  sha == frozen dataset entry, production manifest `source_image.sha256` ==
+  dataset entry, and manifest worker sha256 == the repository's
+  `grounded.py` digest — a production manifest borrowed from another image
+  (with its masks) is rejected, not scored;
+- greedy ties break on frozen stable ids (`ann_id` / `asset_id`, PROTOCOL
+  §4.3), not list position — shuffling input order cannot change pairing
+  (duplicate masks make exact IoU ties common). The 5-image metrics were
+  recomputed after the fix: identical to the published numbers (no natural
+  ties in this set); recorded in the lane's `eval-v2` rerun.
 
 Artifacts (not in git): input manifest + GT + runs + metrics + overlays under
 `.simready-collaboration/parallel-followup-20261115/simready-data-validation/artifacts/`;
