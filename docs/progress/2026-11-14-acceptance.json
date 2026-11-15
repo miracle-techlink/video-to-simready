@@ -1,0 +1,39 @@
+{
+  "schema_version": 2,
+  "record_kind": "historical acceptance evidence summary (desensitized)",
+  "note": "历史验收记录摘要,不代表当前 main 新链路通过。仓库外服务器证据的公开化摘要;原始文件在私有验收目录,不含可公开链接。",
+  "media_identity_note": "两次运行绑定的实际输入为同一段剪辑;原片 SHA 不冒充实际 clip 输入,输出视频各自记录 SHA 以保留产物可追溯性。",
+  "entries": [
+    {
+      "id": "starbucks-12-keyframe-fresh-reconstruction-survey",
+      "date": "2026-11-14T13:12:11Z",
+      "date_status": "recorded (checked_at field present)",
+      "date_beijing": "2026-11-14 21:12:11 CST",
+      "repo_commit_at_run": "d65696a7218a06135bedb15e9a1d41887b2a8426",
+      "scope": "真实门店视频剪辑 12 关键帧全新重建 -> USD -> Isaac Sim 巡览渲染(5s / 120帧 / 720p)",
+      "original_video_sha256": "bd22b7dfab2ee1422be2a3d982085159ac376d5fb2e3ff3f3105c4339e9f642c",
+      "input_clip_sha256": "4fdb57b259287697728a2e0d616912ca6743557e2a512c77b72ae136af1f4729",
+      "output_video_sha256": "89e35e956a8e9082a3f0fa2ec6752099cbecfc0538d13fa542b3ae0c8f9ef673",
+      "gaussian_points": 111365,
+      "scale_verified": false,
+      "physical_asset_validation": "NOT_EVALUATED",
+      "task_validated": false,
+      "repaired": false,
+      "limitations": "未修复的诊断性原始巡览;米制尺度未验证;物性与机器人任务均未评估;不构成修复交付或新链路验收"
+    },
+    {
+      "id": "starbucks-static-repair-preview-v6",
+      "date": null,
+      "date_status": "not_recorded (delivery-check/summary/quality-review JSON 均无完成/审核绝对时间字段;目录命名不作为完成日期证据)",
+      "review_status": "REPAIRED_PREVIEW_REVIEWED / publish_allowed=true(截至 2026-11-15 复核时存在该记录)",
+      "repo_commit_at_run": "unknown_at_summary_time",
+      "scope": "复用同视频既有重建几何与估计相机的静态修复预览(入口区域)",
+      "original_video_sha256": "bd22b7dfab2ee1422be2a3d982085159ac376d5fb2e3ff3f3105c4339e9f642c",
+      "input_clip_sha256": "4fdb57b259287697728a2e0d616912ca6743557e2a512c77b72ae136af1f4729",
+      "output_video_sha256": "fab8f9b845331b64e0b2782c2026ec0b4d6f234471a1d298e71ebb1c9b671554",
+      "scale_verified": false,
+      "task_validated": false,
+      "limitations": "静态外观修复预览,非重新重建;完成日期未单独核实;不证明物性、尺度、任务,也不证明当前 main 新 benchmark 链路"
+    }
+  ]
+}

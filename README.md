@@ -1,15 +1,59 @@
 # Video to SimReady
 
-核心 video → reconstruction → USD pipeline，以及隔离的 Isaac Sim 容器部署。
+面向 real-to-sim 的基础设施：核心 video → reconstruction → USD 流水线、候选场景独立验收，以及隔离的 Isaac Sim 容器部署。
 
 [![CI](https://github.com/miracle-techlink/video-to-simready/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/miracle-techlink/video-to-simready/actions/workflows/test.yml) · [开发者指南：架构、baseline 与 benchmark 接入](docs/README.md)
 
 | 分支 | 内容 |
 |---|---|
 | `main` | 核心流水线、baseline 接入、资产与物性、独立验收、执行设施、Isaac Sim 部署及必要测试 |
-| [`aloho-hackson`](https://github.com/miracle-techlink/video-to-simready/tree/aloho-hackson) | 分离前的完整版本：Aholo 黑客松、专用机器人任务、Agent 修复／经验、研究代码、视频物料与历史报告 |
+| [`aloho-hackson`](https://github.com/miracle-techlink/video-to-simready/tree/aloho-hackson) | 分离前的完整版本：Aholo 黑客松、专用机器人任务、Agent 修复／经验、研究代码、视频物料与历史报告（历史存档，不再演进） |
+| `feat/digua-hackathon-drone-substation` | 无人机专用场景／控制／任务；核心 pipeline 从 main 同步，通用改动先回 main |
 
 main 保留 `artifact`、`command`、`aholo` 重建后端。Aholo 云端模型由服务方提供，本仓库实现客户端与下游处理；其他算法通过冻结输入、环境身份和统一 bundle 接入。
+
+## 功能模块
+
+| 模块 | 主要功能 | 典型输入 → 输出 |
+|---|---|---|
+| [`workflows`](src/simready/workflows) | pipeline 计划与阶段恢复、baseline 矩阵对比、benchmark suite 编排与聚合 | pipeline.json + 任务声明 → 执行计划与汇总报告 |
+| [`ingestion`](src/simready/ingestion) | 视频抽帧与观测提取；`artifact` / `command` / `aholo` 多后端重建适配；文本定位分割（DINO+SAM） | 视频/图像 → 重建 bundle + 来源绑定语义 mask |
+| [`assets`](src/simready/assets) | 语义关联与遮挡剔除、外观与物理声明、CPU 场景编译与碰撞几何 | 语义 mask + 重建几何 → USD 场景资产 |
+| [`simulation`](src/simready/simulation) | Isaac Sim 环境与标定观测、固定相机 RGBD 采集与回执、物理探针与巡览渲染 | USD 场景 + 观测计划 → RGBD 观测 + 运行回执 |
+| [`evaluation`](src/simready/evaluation) | 候选场景独立评分、指标/阈值核验与失败反例、质量报告（只读冻结产物） | 冻结观测/候选产物 → 评分与验收报告 |
+| [`execution`](src/simready/execution) | 本地与容器执行、取消与恢复、GPU UUID 租约、任务图与工件缓存 | 执行请求 → 进程结果与回执 |
+| [`core`](src/simready/core) | hash 冻结引用证据、JSON IO、基础校验与边界类型 | 文件/JSON → 证据引用与校验结果 |
+| [`geometry`](src/simready/geometry) | 坐标约定、变换校验、纯投影几何（深度反投影/多边形） | 深度/相机/位姿 → 坐标与投影结果 |
+
+## 分层架构
+
+![simready 分层架构](docs/images/architecture.png)
+
+图为职责分层与产物流转示意；精确代码依赖以[架构合同](configs/architecture/module_boundaries.json)为准。[可编辑 SVG 源文件](docs/images/architecture.svg)。
+
+## Latest News
+
+- **2026-11-15 — Benchmark 与 CI**：加入统一 benchmark 输入合同、候选场景独立评分与批量对比编排，完善 CPU/打包测试与失败报告（[#21](https://github.com/miracle-techlink/video-to-simready/pull/21)、[#22](https://github.com/miracle-techlink/video-to-simready/pull/22)）。
+- **2026-11-14 — 核心流水线整理**：支持阶段恢复与多重建后端接入，整理通用模块、示例与开发文档（[#14](https://github.com/miracle-techlink/video-to-simready/pull/14)–[#19](https://github.com/miracle-techlink/video-to-simready/pull/19)）。
+- **2026-11-13 — 视频到场景**：新增可恢复的视频到 USD 流程，以及多类别语义资产与逐物体物性写入（[#7](https://github.com/miracle-techlink/video-to-simready/pull/7)、[#13](https://github.com/miracle-techlink/video-to-simready/pull/13)）。
+
+<details><summary>Earlier news (2026)</summary>
+
+- 2026-11-12 — 执行与工具：资源感知调度、结果缓存和统一 CLI（[#1](https://github.com/miracle-techlink/video-to-simready/pull/1)–[#3](https://github.com/miracle-techlink/video-to-simready/pull/3)）。
+- 2026-11-10 — 项目开源：发布初始代码与示例。
+
+</details>
+
+## To-do
+
+- [ ] 真实 GPU 多视角采集 → 候选独立评分 → 批量编排的全链验收。
+- [ ] 真实图像特征提取与分割准确率评测。
+- [ ] 带尺度/位姿参考的数据集上的重建评测。
+- [ ] 变电站无人机飞行与巡检演示（合成场景）。
+- [ ] 自主定位/避障/导航训练。
+- [ ] 受控 GPU CI 与部署回滚。
+
+> 通用能力经 PR 合入 main；活动分支保留专用场景与任务配置。详细进度与验收记录见 [DEVELOPMENT_PROGRESS.md](docs/DEVELOPMENT_PROGRESS.md) 与 [2026-11-14 验收摘要](docs/progress/2026-11-14-acceptance.json)。
 
 ## CPU 快速开始
 
