@@ -199,6 +199,10 @@ def build_drone(stage, parent_path: str = "/World/Drone", start_position=None) -
     collision_box.CreateSizeAttr(1.0)
     collision_box.AddScaleOp().Set(Gf.Vec3f(*SPEC.envelope))
     UsdPhysics.CollisionAPI.Apply(collision_box.GetPrim())
+    # collision-only geometry: hide from rendering (it would otherwise draw a
+    # gray box swallowing the drone body and blacking out the FPV camera
+    # mounted inside the envelope)
+    UsdGeom.Imageable(collision_box.GetPrim()).MakeInvisible()
 
     return {
         "path": None,
