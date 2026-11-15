@@ -82,7 +82,8 @@
         "__main__",
         "cli",
         "nerf2physics",
-        "video_frames"
+        "video_frames",
+        "visual_features"
       ]
     },
     "evaluation": {
@@ -186,6 +187,7 @@
     "simready.evaluation.scoring.evaluate_candidate",
     "simready.evaluation.verification.verify_candidate",
     "simready.ingestion.video_frames.extract_frames",
+    "simready.ingestion.visual_features.encode_regions",
     "simready.ingestion.segmentation.grounded.grounded_segment_image",
     "simready.ingestion.segmentation.semantic.segment_image",
     "simready.assets.association.semantic_projection.build_semantic_spec",
