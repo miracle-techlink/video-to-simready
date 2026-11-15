@@ -60,6 +60,18 @@ Patterns (not code copies) from `src/simready/simulation/depth_observation.py`
 (SimulationApp bootstrap, import-after-app order, replicator settings) and
 `scene_video.py` (BasicWriter + orchestrator.step + ffmpeg encode/verify loop).
 
+## Isaac 6.2 gotchas baked into this demo (all hit during development)
+
+- Composed/referenced stage files froze physics-driven rendering (rigid body
+  invisible / stuck); the demo assembles the stage **at runtime** instead.
+- Fabric-only transforms never reached Hydra in headless base.kit;
+  `SimulationManager.enable_fabric(False)` forces USD writeback (`updateToUsd`).
+- Collision-only geometry still renders — the envelope box swallowed the drone
+  and blacked out the FPV camera inside it; `MakeInvisible()` hides it
+  (physics keeps the collider).
+- Contact forces need `RigidPrim(..., max_contact_count=N)` plus
+  `PhysxContactReportAPI` applied before physics init.
+
 ## Next stage (not claimed done)
 
 Train a navigation/tracking policy in this scene (RL or imitation), evaluate
