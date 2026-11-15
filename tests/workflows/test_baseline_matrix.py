@@ -11,6 +11,7 @@ from simready.core.artifacts import digest, read_json, write_json
 from simready.core.evidence import reference
 from simready.execution.processes.local import ProcessCancelledError
 from simready.workflows.pipelines import baseline_matrix as matrix
+from simready.workflows.pipelines import benchmark_suite as suite_mod
 from tests.paths import REPOSITORY_ROOT
 
 
@@ -425,7 +426,7 @@ def test_auto_mode_requires_render_contract(prepared, tmp_path):
 def _fake_renderer(scene_id):
     """Return a renderer stub writing a receipt bound to the given scene."""
 
-    def render(contract, view_set_path, reconstruction, directory):
+    def render(contract, view_set_path, reconstruction, directory, **kwargs):
         from simready.core.benchmark_contract import validate_render_request
 
         directory = Path(directory)
@@ -452,7 +453,9 @@ def _fake_renderer(scene_id):
         write_json(request_path, request)
         validate_render_request(read_json(request_path), request_path.parent)
         view_set = read_json(view_set_path)
-        render_dir = directory / "render"
+        # Match the production geometry: output is a SIBLING render-output/,
+        # never inside the read-only asset bundle.
+        render_dir = directory.parent / "render-output"
         render_dir.mkdir(parents=True, exist_ok=True)
         views = []
         for view in view_set["views"]:
@@ -982,3 +985,164 @@ class TestRenderAutoBundle:
             execution_backend=captured["backend"],
         )
         assert receipt["execution_backend"] == "local"
+
+
+def prepared_matrix(tmp_path):
+    """Create a normal fixture matrix config for backend pass-through tests."""
+    prepare = runpy.run_path(
+        str(REPOSITORY_ROOT / "examples/reconstruction/prepare_fixture.py")
+    )["prepare"]
+    return prepare(tmp_path / "inputs")
+
+
+class TestAutoBackendPassthrough:
+    """Explicit render_backend is frozen at planning and reaches the launch;
+    render_receipt artifacts point at the real render-output path."""
+
+    def test_backend_frozen_and_default_and_rejected(self, tmp_path, monkeypatch):
+        path, out = prepared_matrix(tmp_path), tmp_path / "run"
+        fixture = _auto_member_fixture(path.parent)
+        doc = _auto_config(path, fixture)
+        doc["evaluation"]["render_backend"] = "local"
+        write_json(path, doc)
+        plan = matrix.plan_matrix(path, out / "p1")
+        assert plan["evaluation"]["render_backend"] == "local"
+
+        doc2 = _auto_config(path, fixture)
+        doc2["evaluation"].pop("render_backend", None)
+        write_json(path, doc2)
+        plan2 = matrix.plan_matrix(path, out / "p2")
+        assert plan2["evaluation"]["render_backend"] == "docker"
+
+        doc3 = _auto_config(path, fixture)
+        doc3["evaluation"]["render_backend"] = "podman"
+        write_json(path, doc3)
+        with pytest.raises(ValueError, match="render_backend"):
+            matrix.plan_matrix(path, out / "p3")
+
+        # Suite scenes embed matrix configs; suite planning re-freezes each
+        # matrix through plan_matrix, so the nested backend survives intact.
+        doc = _auto_config(path, fixture)
+        doc["evaluation"]["render_backend"] = "local"
+        write_json(path, doc)
+        suite_config = tmp_path / "suite.json"
+        write_json(
+            suite_config,
+            {
+                "schema_version": 1,
+                "kind": "benchmark_suite",
+                "suite_id": "backend-passthrough",
+                "scenes": [{"scene_id": "s0", "matrix": reference(path)}],
+                "evaluation": {"timeout_s": 60},
+            },
+        )
+        suite_plan = suite_mod.plan_suite(suite_config, tmp_path / "suite-out")
+        matrix_plan = matrix.plan_matrix(
+            Path(suite_plan["scenes"][0]["matrix"]["path"]),
+            tmp_path / "suite-out" / "s0",
+        )
+        assert matrix_plan["evaluation"]["render_backend"] == "local"
+        assert not (tmp_path / "suite-out").exists()
+
+    def test_tampered_frozen_backend_rejected_before_execution(
+        self, tmp_path, monkeypatch
+    ):
+        path = prepared_matrix(tmp_path)
+        fixture = _auto_member_fixture(path.parent)
+        doc = _auto_config(path, fixture)
+        doc["evaluation"]["render_backend"] = "local"
+        write_json(path, doc)
+        plan = matrix.plan_matrix(path, tmp_path / "run")
+        assert plan["evaluation"]["render_backend"] == "local"
+        plan["evaluation"]["render_backend"] = "docker"
+        monkeypatch.setattr(
+            matrix, "execute_video", lambda *args: pytest.fail("must not execute")
+        )
+        with pytest.raises(ValueError, match="identity mismatch"):
+            matrix.execute_matrix(plan)
+
+    def test_frozen_backend_reaches_launch_and_receipt_ref_is_real(
+        self, tmp_path, monkeypatch
+    ):
+        """Full auto execution with only the Isaac boundary stubbed: the
+        frozen backend is what run_benchmark_observation receives, and the
+        matrix row references evaluation/render-output/receipt.json."""
+        from simready.core.artifacts import digest
+
+        path, out = prepared_matrix(tmp_path), tmp_path / "run"
+        fixture = _auto_member_fixture(path.parent)
+        doc = _auto_config(path, fixture)
+        doc["evaluation"]["render_backend"] = "local"
+        write_json(path, doc)
+        plan = matrix.plan_matrix(path, out / "plan")
+
+        captured = {}
+
+        def _fake_run(plan_arg, **kwargs):
+            captured["backend"] = kwargs.get("backend")
+            captured["output_dir"] = str(plan_arg["output_dir"])
+            render = Path(plan_arg["output_dir"])
+            render.mkdir(parents=True, exist_ok=True)
+            views = []
+            for view in plan_arg["views"]:
+                image = render / f"{view['view_id']}.rgb.png"
+                Image.new("RGB", (16, 16), color=(9, 9, 9)).save(image)
+                views.append(
+                    {
+                        "view_id": view["view_id"],
+                        "width": 16,
+                        "height": 16,
+                        "rgb_file": image.name,
+                        "rgb_sha256": digest(image),
+                        "depth_file": None,
+                        "depth_sha256": None,
+                    }
+                )
+            write_json(
+                render / "receipt.json",
+                {
+                    "synthetic_fixture": False,
+                    "worker": "isaac-boundary-stub",
+                    "execution_backend": kwargs["backend"],
+                    "scene_id": "scene.usd",
+                    "seed": 7,
+                    "want_depth": False,
+                    "render_settings": {"width": 16, "height": 16, "mode": "rgb"},
+                    "views": views,
+                    "completed": len(views),
+                    "expected": len(views),
+                    "duration_seconds": 0.0,
+                },
+            )
+            return {"returncode": 0}
+
+        monkeypatch.setattr(
+            "simready.simulation.benchmark_observation.run_benchmark_observation",
+            _fake_run,
+        )
+
+        def fake_scoring(protocol, candidate, directory, timeout=300, **kwargs):
+            scoring_dir = Path(directory)
+            scoring_dir.mkdir(parents=True, exist_ok=True)
+            write_json(scoring_dir / "scorecard.json", {"status": "PASS", "checks": []})
+            return {
+                "execution_status": "COMPLETED",
+                "quality_status": "PASS",
+                "defects_available": True,
+                "scorecard": {"status": "PASS"},
+            }
+
+        monkeypatch.setattr(matrix, "run_scoring", fake_scoring)
+        report = matrix.execute_matrix(plan)
+        row = report["members"][0]
+        assert row["quality"]["status"] == "MEASURED", row
+        assert captured["backend"] == "local"
+        receipt_ref = row["artifacts"]["render_receipt"]
+        assert receipt_ref == str(Path(captured["output_dir"]) / "receipt.json")
+        assert Path(receipt_ref).is_file()
+        assert Path(captured["output_dir"]).name == "render-output"
+        receipt = read_json(receipt_ref)
+        assert receipt["execution_backend"] == "local"
+        assert receipt["completed"] == receipt["expected"] == 2
+        candidate = read_json(row["artifacts"]["candidate"])
+        assert candidate["render_receipt_sha256"] == digest(Path(receipt_ref))

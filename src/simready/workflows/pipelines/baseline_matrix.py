@@ -16,6 +16,13 @@ Candidate modes (set per member via ``candidate_source``):
   scoring is attempted. Quality is reported as ``NOT_EVALUATED`` with an
   explicit reason.
 
+Render execution backend: ``evaluation.render_backend`` in the matrix config
+selects ``"local"`` (native Isaac python on this host, e.g. the GPUFree
+server's Isaac 6.2) or ``"docker"`` (default; the simready-isaac-core
+container). The choice is validated and frozen into the plan at planning
+time and the executor launches exactly the frozen backend - there is no
+environment-based fallback.
+
 The matrix never ranks members or promotes a backend. Aggregation across
 scenes is delegated to ``benchmark_suite.py``; this module remains
 single-scene.
@@ -234,9 +241,22 @@ def plan_matrix(
     video = reference(resolve_ref(raw.get("video"), config.parent))
     evaluation = fields(
         raw.get("evaluation", {}),
-        {"protocol", "camera_evidence", "timeout_s", "render_contract"},
+        {
+            "protocol",
+            "camera_evidence",
+            "timeout_s",
+            "render_contract",
+            "render_backend",
+        },
         "evaluation",
     )
+    render_backend = evaluation.get("render_backend", "docker")
+    if render_backend not in {"local", "docker"}:
+        raise ValueError(
+            "evaluation.render_backend must be local or docker "
+            f"(got {render_backend!r}); it is frozen into the plan, and no "
+            "environment-based fallback is performed"
+        )
     timeout = evaluation.get("timeout_s", 300)
     if number(timeout, "evaluation timeout") <= 0:
         raise ValueError("Evaluation timeout must be positive")
@@ -341,6 +361,7 @@ def plan_matrix(
             "protocol": protocol_ref,
             "camera_evidence": camera_ref,
             "timeout_s": timeout,
+            "render_backend": render_backend,
             "protocol_is_caller_supplied": True,
             "render_contract": (
                 render_contract["declaration"] if render_contract else None
@@ -660,11 +681,15 @@ def _quality_auto(member, manifest, directory, reconstruction):
     ensure_unchanged(manifest["frozen_references"])
 
     directory.mkdir(parents=True, exist_ok=True)
+    # The backend is a FROZEN plan value: workers launch exactly what was
+    # planned (docker default for compatibility), never an environment-based
+    # fallback.
     request_path, receipt_path = render_auto_observations(
         contract,
         Path(contract["view_set"]["path"]),
         reconstruction,
         directory / "render-input",
+        backend=evaluation.get("render_backend", "docker"),
     )
     if not receipt_path.is_file():
         raise ValueError("Benchmark renderer produced no receipt")
@@ -758,7 +783,7 @@ def _artifact_refs(member, quality, evaluation_dir):
         candidate = evaluation_dir / "candidate" / "candidate.json"
         if candidate.is_file():
             refs["candidate"] = str(candidate)
-        render_receipt = evaluation_dir / "render-input" / "render" / "receipt.json"
+        render_receipt = evaluation_dir / "render-output" / "receipt.json"
         if render_receipt.is_file():
             refs["render_receipt"] = str(render_receipt)
     scorecard = quality.get("scorecard") if isinstance(quality, dict) else None
@@ -909,7 +934,15 @@ def execute_matrix(manifest):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog=(
+            "The render execution backend is not a CLI option: it is the "
+            "frozen evaluation.render_backend matrix-config field "
+            '("local"/"docker", default "docker"). The CLI never rewrites '
+            "frozen plans; edit the config and re-plan."
+        ),
+    )
     parser.add_argument("--matrix", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     scope = parser.add_mutually_exclusive_group()
