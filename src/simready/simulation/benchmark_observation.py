@@ -74,7 +74,11 @@ def run_benchmark_observation(
     """Execute a planned batch observation via the Isaac launcher.
 
     Uses launch_worker with a task graph; each view is a separate task
-    sharing the same GPU lease. Returns the aggregated receipt.
+    sharing the same GPU lease. The manifest bundle (request root) is the
+    worker's asset scope: under Docker it is mounted read-only at /assets,
+    which keeps the writable render output (/output) a sibling outside the
+    bundle instead of a mount conflict inside it. Returns the aggregated
+    receipt.
     """
     from simready.execution.workers.isaac_launcher import launch_worker
 
@@ -89,7 +93,7 @@ def run_benchmark_observation(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     repo = repo or Path.cwd()
-    assets = assets or Path.cwd()
+    assets = assets or request_path.parent
 
     def _worker_visible(host_path):
         """Translate host paths into worker-process paths for the backend.
@@ -122,6 +126,7 @@ def run_benchmark_observation(
         {
             "schema_version": 2,
             "kind": "observation_plan",
+            "backend": backend,
             # The worker re-reads and re-validates the manifest FILES against
             # these roots; embedded copies below are cross-checked for drift.
             "request_root": _worker_visible(request_path.parent),
@@ -166,6 +171,8 @@ def _build_receipt(
     view_set: dict,
     views_result: list[dict],
     started: float,
+    *,
+    execution_backend: str | None = None,
 ) -> dict:
     """Build the receipt matching the fake_render_worker layout."""
     per_view = []
@@ -186,6 +193,7 @@ def _build_receipt(
         "synthetic_fixture": False,
         "banner": "Benchmark observation worker. Real rendering evidence.",
         "worker": "simready.simulation.benchmark_observation",
+        "execution_backend": execution_backend or "unspecified",
         "scene_id": render_request.get("scene", {}).get("path", "unknown"),
         "seed": render_request["seed"],
         "want_depth": render_request["image_settings"]["mode"] == "rgbd",
@@ -423,7 +431,13 @@ def _worker_main(argv=None) -> int:
                 f"Captured {len(views_result)} of {expected_views} views; "
                 "a partial capture is a failure, not a receipt"
             )
-        receipt = _build_receipt(render_request, view_set, views_result, started)
+        receipt = _build_receipt(
+            render_request,
+            view_set,
+            views_result,
+            started,
+            execution_backend=plan_data.get("backend"),
+        )
         write_json(out_dir / "receipt.json", receipt)
         print(f"Benchmark observation complete: {out_dir / 'receipt.json'}", flush=True)
         completed = True

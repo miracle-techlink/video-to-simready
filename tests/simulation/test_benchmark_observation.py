@@ -776,6 +776,7 @@ class TestWorkerManifestRootAndExitCodes:
             "sp ace",
         ]
         assert receipt["completed"] == receipt["expected"] == 4
+        assert receipt["execution_backend"] == "local"
         # Nothing frozen was rewritten by planning/execution.
         assert digest(req_path) == frozen["request"]
         assert digest(vs_path) == frozen["view_set"]
@@ -967,3 +968,59 @@ class TestWorkerManifestRootAndExitCodes:
             "0start",
             "sp ace",
         ]
+
+    def test_docker_auto_geometry_mounts_bundle_as_readonly_assets(
+        self, tmp_path, monkeypatch
+    ):
+        """F-GPU-8: bundle outside the repo tree is mounted read-only as the
+        assets scope; render output is its writable sibling. Exercised through
+        the public run_benchmark_observation -> launch_worker ->
+        container_command mapping; only the docker process spawn is stubbed."""
+        from simready.simulation.benchmark_observation import (
+            plan_benchmark_observation,
+            run_benchmark_observation,
+        )
+
+        repo = tmp_path / "worktree"
+        repo.mkdir()
+        member = tmp_path / "suite" / "evaluation" / "m"
+        bundle = member / "render-input"
+        bundle.mkdir(parents=True)
+        output_dir = member / "render-output"
+        req_path = _write_render_request(bundle)
+        vs_path = bundle / "view_set.json"
+
+        captured = {}
+
+        def _fake_execute(command, **kwargs):
+            captured["command"] = list(command)
+            return {"returncode": 0}
+
+        import simready.execution.workers.isaac_launcher as launcher
+
+        monkeypatch.setattr(launcher, "_execute_launch", _fake_execute)
+
+        plan = plan_benchmark_observation(req_path, vs_path, output_dir)
+        run_benchmark_observation(plan, backend="docker", repo=repo)
+
+        command = captured["command"]
+        mounts = [a for a in command if a.startswith("type=bind,src=")]
+        assert f"type=bind,src={bundle},dst=/assets,readonly" in mounts, mounts
+        assert f"type=bind,src={output_dir},dst=/output" in mounts, mounts
+        assert f"type=bind,src={repo},dst=/workspace,readonly" in mounts, mounts
+        # Worker argv uses container-visible plan/output paths.
+        argv = command[command.index("worker") :]
+        assert argv[:3] == [
+            "worker",
+            "--plan",
+            "/output/observation_plan.json",
+        ]
+        assert argv[argv.index("--out") + 1] == "/output"
+        # The plan records the real backend and container-side roots.
+        plan_data = json.loads((output_dir / "observation_plan.json").read_text())
+        assert plan_data["backend"] == "docker"
+        assert plan_data["request_root"] == "/assets"
+        assert plan_data["view_set_root"] == "/assets"
+        assert plan_data["output_dir"] == "/output"
+        # Writable output never sits inside the read-only bundle mount.
+        assert not output_dir.is_relative_to(bundle)

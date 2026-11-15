@@ -622,7 +622,7 @@ def _bundle_contract(scene):
 def _fake_gpu_execution(render_dir):
     """Replace only the GPU execution boundary; planning stays production."""
 
-    def _run(plan):
+    def _run(plan, **kwargs):
         render = Path(plan["output_dir"])
         render.mkdir(parents=True, exist_ok=True)
         views = []
@@ -931,3 +931,54 @@ class TestRenderAutoBundle:
                 reconstruction,
                 tmp_path / "render-input",
             )
+
+    def test_auto_render_output_is_bundle_sibling_with_backend_recorded(
+        self, tmp_path, monkeypatch
+    ):
+        """F-GPU-8 geometry: render output never nests inside the read-only
+        bundle; the requested backend reaches the worker launch."""
+        scene = tmp_path / "scene.usda"
+        scene.write_text("#usda 1.0\n")
+        ply = tmp_path / "recon.ply"
+        ply.write_text("ply\n")
+        view_set = _bundle_view_set(tmp_path)
+        reconstruction = {"ply_path": str(ply), "ply_sha256": digest(ply)}
+        captured = {}
+
+        def _capture_run(plan, **kwargs):
+            captured["plan"] = plan
+            captured["backend"] = kwargs.get("backend")
+            render = Path(plan["output_dir"])
+            render.mkdir(parents=True, exist_ok=True)
+            write_json(render / "receipt.json", {"status": "STUB", "views": []})
+            return {"returncode": 0}
+
+        monkeypatch.setattr(
+            "simready.simulation.benchmark_observation.run_benchmark_observation",
+            _capture_run,
+        )
+        member_dir = tmp_path / "evaluation" / "m"
+        request_path, receipt_path = matrix.render_auto_observations(
+            _bundle_contract(scene),
+            view_set,
+            reconstruction,
+            member_dir / "render-input",
+            backend="local",
+        )
+        bundle = member_dir / "render-input"
+        output = member_dir / "render-output"
+        assert request_path.parent == bundle
+        assert receipt_path == output / "receipt.json"
+        assert captured["backend"] == "local"
+        assert not Path(captured["plan"]["output_dir"]).is_relative_to(bundle)
+        # The receipt the worker writes records the actual backend used.
+        import simready.simulation.benchmark_observation as bo
+
+        receipt = bo._build_receipt(
+            read_json(request_path),
+            {"views": []},
+            [],
+            0.0,
+            execution_backend=captured["backend"],
+        )
+        assert receipt["execution_backend"] == "local"

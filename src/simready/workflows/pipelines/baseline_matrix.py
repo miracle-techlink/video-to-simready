@@ -547,7 +547,16 @@ def _verify_bundle_scene_resolves(scene_dest):
     return True
 
 
-def render_auto_observations(contract, view_set_path, reconstruction, directory):
+def render_auto_observations(
+    contract,
+    view_set_path,
+    reconstruction,
+    directory,
+    *,
+    backend="docker",
+    gpu="0",
+    timeout_s=7200,
+):
     """Materialize a render request bound to the actual reconstruction and render.
 
     The planning-time contract froze the renderer identity, scene, view set
@@ -557,7 +566,10 @@ def render_auto_observations(contract, view_set_path, reconstruction, directory)
     dependencies, structure-preserved), the view set, every camera-evidence
     file the frozen view set references, the reconstruction and
     ``render_request.json``. No frozen input is rewritten and no future file
-    is read. Returns the render request and receipt paths.
+    is read. The render output is a SIBLING of the bundle (never inside it):
+    the launcher mounts the bundle read-only as the asset scope and the
+    output writable, which requires the two trees not to nest. Returns the
+    render request and receipt paths.
     """
     from simready.core.benchmark_contract import validate_render_request
     from simready.simulation.benchmark_observation import (
@@ -613,11 +625,12 @@ def render_auto_observations(contract, view_set_path, reconstruction, directory)
     request_path = directory / "render_request.json"
     write_json(request_path, request)
     validate_render_request(read_json(request_path), request_path.parent)
+    output_dir = directory.parent / "render-output"
     plan = plan_benchmark_observation(
-        request_path, directory / "view_set.json", directory / "render"
+        request_path, directory / "view_set.json", output_dir
     )
-    run_benchmark_observation(plan)
-    return request_path, directory / "render" / "receipt.json"
+    run_benchmark_observation(plan, backend=backend, gpu=gpu, timeout_s=timeout_s)
+    return request_path, output_dir / "receipt.json"
 
 
 def _quality_auto(member, manifest, directory, reconstruction):
