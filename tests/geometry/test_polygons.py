@@ -4,7 +4,6 @@ import numpy as np
 
 from simready.geometry.polygons import inside_convex_polygon
 
-
 SQUARE = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
 
 

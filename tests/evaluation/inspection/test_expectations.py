@@ -11,15 +11,33 @@ from simready.evaluation.inspection.expectations import (
 
 class TestObjects:
     def test_valid_box(self):
-        doc = {"objects": [{"id": "box1", "type": "box", "bounds_world": {"min": [0, 0, 0], "max": [1, 1, 1]}}]}
+        doc = {
+            "objects": [
+                {
+                    "id": "box1",
+                    "type": "box",
+                    "bounds_world": {"min": [0, 0, 0], "max": [1, 1, 1]},
+                }
+            ]
+        }
         result = _objects(doc, "test")
         assert "box1" in result
 
     def test_duplicate_id_rejected(self):
-        doc = {"objects": [
-            {"id": "box1", "type": "box", "bounds_world": {"min": [0, 0, 0], "max": [1, 1, 1]}},
-            {"id": "box1", "type": "box", "bounds_world": {"min": [0, 0, 0], "max": [1, 1, 1]}},
-        ]}
+        doc = {
+            "objects": [
+                {
+                    "id": "box1",
+                    "type": "box",
+                    "bounds_world": {"min": [0, 0, 0], "max": [1, 1, 1]},
+                },
+                {
+                    "id": "box1",
+                    "type": "box",
+                    "bounds_world": {"min": [0, 0, 0], "max": [1, 1, 1]},
+                },
+            ]
+        }
         with pytest.raises(ValueError, match="[Dd]uplicate"):
             _objects(doc, "test")
 
@@ -45,7 +63,9 @@ class TestExpectedPhysics:
         spec = {"collision": {}}
         result = _expected_physics(obj, spec)
         assert result["motion_type"] == "static"
-        assert result["contact"]["static_friction"] == _CONTACT_DEFAULTS["static_friction"]
+        assert (
+            result["contact"]["static_friction"] == _CONTACT_DEFAULTS["static_friction"]
+        )
 
     def test_button_defaults_to_dynamic(self):
         obj = {"id": "btn", "type": "button", "physics": {}}

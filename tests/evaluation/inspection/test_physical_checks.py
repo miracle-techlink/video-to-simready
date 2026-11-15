@@ -1,7 +1,5 @@
 """Physical contract checks: friction bounds, mass positivity, inertia triangle."""
 
-import pytest
-
 from simready.evaluation.inspection.expectations import _physical_contract
 
 
@@ -9,11 +7,13 @@ def _run_contract(obj, spec):
     """Run _physical_contract and return the checks list."""
     checks = []
     physics = obj.get("physics", {})
-    contact = dict({
-        "static_friction": 0.8,
-        "dynamic_friction": 0.7,
-        "restitution": 0.0,
-    })
+    contact = dict(
+        {
+            "static_friction": 0.8,
+            "dynamic_friction": 0.7,
+            "restitution": 0.0,
+        }
+    )
     contact.update(spec.get("collision", {}))
     contact.update(physics.get("contact", {}))
     expected = {
@@ -43,7 +43,11 @@ class TestMotionContract:
         assert cm["b.input_contract.motion"]["passed"] is True
 
     def test_box_dynamic_passes(self):
-        obj = {"id": "b", "type": "box", "physics": {"motion_type": "dynamic", "mass_kg": 1.0}}
+        obj = {
+            "id": "b",
+            "type": "box",
+            "physics": {"motion_type": "dynamic", "mass_kg": 1.0},
+        }
         checks = _run_contract(obj, {"collision": {}})
         cm = _check_map(checks)
         assert cm["b.input_contract.motion"]["passed"] is True
@@ -71,21 +75,31 @@ class TestFrictionContract:
         assert cm["b.input_contract.friction_order"]["passed"] is True
 
     def test_excessive_friction_fails(self):
-        obj = {"id": "b", "type": "box", "physics": {"contact": {"static_friction": 15.0}}}
+        obj = {
+            "id": "b",
+            "type": "box",
+            "physics": {"contact": {"static_friction": 15.0}},
+        }
         checks = _run_contract(obj, {"collision": {}})
         cm = _check_map(checks)
         assert cm["b.input_contract.static_friction"]["passed"] is False
 
     def test_negative_friction_fails(self):
-        obj = {"id": "b", "type": "box", "physics": {"contact": {"static_friction": -0.1}}}
+        obj = {
+            "id": "b",
+            "type": "box",
+            "physics": {"contact": {"static_friction": -0.1}},
+        }
         checks = _run_contract(obj, {"collision": {}})
         cm = _check_map(checks)
         assert cm["b.input_contract.static_friction"]["passed"] is False
 
     def test_dynamic_exceeds_static_fails(self):
-        obj = {"id": "b", "type": "box", "physics": {
-            "contact": {"static_friction": 0.5, "dynamic_friction": 0.8}
-        }}
+        obj = {
+            "id": "b",
+            "type": "box",
+            "physics": {"contact": {"static_friction": 0.5, "dynamic_friction": 0.8}},
+        }
         checks = _run_contract(obj, {"collision": {}})
         cm = _check_map(checks)
         assert cm["b.input_contract.friction_order"]["passed"] is False
@@ -93,19 +107,31 @@ class TestFrictionContract:
 
 class TestMassContract:
     def test_dynamic_box_positive_mass_passes(self):
-        obj = {"id": "b", "type": "box", "physics": {"motion_type": "dynamic", "mass_kg": 1.0}}
+        obj = {
+            "id": "b",
+            "type": "box",
+            "physics": {"motion_type": "dynamic", "mass_kg": 1.0},
+        }
         checks = _run_contract(obj, {"collision": {}})
         cm = _check_map(checks)
         assert cm["b.input_contract.positive_mass"]["passed"] is True
 
     def test_zero_mass_fails(self):
-        obj = {"id": "b", "type": "box", "physics": {"motion_type": "dynamic", "mass_kg": 0}}
+        obj = {
+            "id": "b",
+            "type": "box",
+            "physics": {"motion_type": "dynamic", "mass_kg": 0},
+        }
         checks = _run_contract(obj, {"collision": {}})
         cm = _check_map(checks)
         assert cm["b.input_contract.positive_mass"]["passed"] is False
 
     def test_negative_mass_fails(self):
-        obj = {"id": "b", "type": "box", "physics": {"motion_type": "dynamic", "mass_kg": -1}}
+        obj = {
+            "id": "b",
+            "type": "box",
+            "physics": {"motion_type": "dynamic", "mass_kg": -1},
+        }
         checks = _run_contract(obj, {"collision": {}})
         cm = _check_map(checks)
         assert cm["b.input_contract.positive_mass"]["passed"] is False
@@ -113,19 +139,29 @@ class TestMassContract:
 
 class TestInertiaContract:
     def test_valid_inertia_passes(self):
-        obj = {"id": "b", "type": "box", "physics": {
-            "motion_type": "dynamic", "mass_kg": 1.0,
-            "inertia_kg_m2": [0.1, 0.1, 0.1],
-        }}
+        obj = {
+            "id": "b",
+            "type": "box",
+            "physics": {
+                "motion_type": "dynamic",
+                "mass_kg": 1.0,
+                "inertia_kg_m2": [0.1, 0.1, 0.1],
+            },
+        }
         checks = _run_contract(obj, {"collision": {}})
         cm = _check_map(checks)
         assert cm["b.input_contract.inertia_kg_m2"]["passed"] is True
 
     def test_inertia_triangle_violation_fails(self):
-        obj = {"id": "b", "type": "box", "physics": {
-            "motion_type": "dynamic", "mass_kg": 1.0,
-            "inertia_kg_m2": [10.0, 0.1, 0.1],
-        }}
+        obj = {
+            "id": "b",
+            "type": "box",
+            "physics": {
+                "motion_type": "dynamic",
+                "mass_kg": 1.0,
+                "inertia_kg_m2": [10.0, 0.1, 0.1],
+            },
+        }
         checks = _run_contract(obj, {"collision": {}})
         cm = _check_map(checks)
         assert cm["b.input_contract.inertia_kg_m2"]["passed"] is False
@@ -133,13 +169,21 @@ class TestInertiaContract:
 
 class TestScaleProvenance:
     def test_dynamic_box_without_scale_declaration_flagged(self):
-        obj = {"id": "b", "type": "box", "physics": {"motion_type": "dynamic", "mass_kg": 1.0}}
+        obj = {
+            "id": "b",
+            "type": "box",
+            "physics": {"motion_type": "dynamic", "mass_kg": 1.0},
+        }
         checks = _run_contract(obj, {"collision": {}})
         cm = _check_map(checks)
         assert cm["b.input_contract.metric_scale_declaration"]["passed"] is False
 
     def test_dynamic_box_with_scale_declaration_passes(self):
-        obj = {"id": "b", "type": "box", "physics": {"motion_type": "dynamic", "mass_kg": 1.0}}
+        obj = {
+            "id": "b",
+            "type": "box",
+            "physics": {"motion_type": "dynamic", "mass_kg": 1.0},
+        }
         spec = {
             "collision": {},
             "source_to_world": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],

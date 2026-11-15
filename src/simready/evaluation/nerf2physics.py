@@ -32,7 +32,10 @@ def _physical_validation_passed(metrics: dict) -> bool:
 
     Returns True only when every metric is present and within its bound.
     """
-    if any(metrics.get(key) is None for key in ("ADE_kg", "APE", "MnRE", "proposal_range_coverage")):
+    if any(
+        metrics.get(key) is None
+        for key in ("ADE_kg", "APE", "MnRE", "proposal_range_coverage")
+    ):
         return False
     t = PHYSICAL_VALIDATION_THRESHOLDS
     return (

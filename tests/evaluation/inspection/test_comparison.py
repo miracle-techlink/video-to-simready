@@ -1,9 +1,5 @@
 """Comparison logic: exact matching, tolerance, and JSON-safe detail recording."""
 
-import math
-
-import pytest
-
 from simready.evaluation.inspection.comparison import _json_detail, _matches, _record
 
 

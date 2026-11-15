@@ -2,8 +2,8 @@
 
 import pytest
 
-from simready.core.artifacts import digest
 from simready.core import evidence
+from simready.core.artifacts import digest
 
 
 def _file(path, content=b"x"):
@@ -21,9 +21,7 @@ def test_reference_records_absolute_path_and_digest(tmp_path):
 
 def test_resolve_ref_accepts_matching_file(tmp_path):
     path = _file(tmp_path / "a.bin")
-    resolved = evidence.resolve_ref(
-        {"path": "a.bin", "sha256": digest(path)}, tmp_path
-    )
+    resolved = evidence.resolve_ref({"path": "a.bin", "sha256": digest(path)}, tmp_path)
     assert resolved == path.resolve()
 
 

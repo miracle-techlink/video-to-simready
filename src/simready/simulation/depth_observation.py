@@ -143,7 +143,9 @@ def normalize_camera_z(
     if (
         type(meters_per_unit) not in (int, float)
         or not math.isfinite(meters_per_unit)
-        or not any(math.isclose(meters_per_unit, m, rel_tol=0, abs_tol=1e-9) for m in allowed)
+        or not any(
+            math.isclose(meters_per_unit, m, rel_tol=0, abs_tol=1e-9) for m in allowed
+        )
     ):
         raise ValueError(
             f"Unverified depth conversion: this worker requires metersPerUnit in {allowed}"
@@ -265,7 +267,12 @@ def _capture_single_view(
                 depth, statistics = None, None
             if float(rgb[:, :, :3].std()) < 1.0:
                 raise ValueError("RGB capture is nearly uniform; inspect scene/camera")
-            return rgb, (depth if want_depth else None), (statistics if want_depth else None), captured_attempt
+            return (
+                rgb,
+                (depth if want_depth else None),
+                (statistics if want_depth else None),
+                captured_attempt,
+            )
         except ValueError as error:
             last_failure = str(error)
             for _ in range(4):
@@ -293,7 +300,11 @@ def _validate_capture_result(
 
 
 def _capture(
-    args: argparse.Namespace, app: Any, inputs: dict[str, Any], *, scene_status: str = "repaired"
+    args: argparse.Namespace,
+    app: Any,
+    inputs: dict[str, Any],
+    *,
+    scene_status: str = "repaired",
 ) -> dict[str, Any]:
     """Called only after SimulationApp creation; imports stay inside Isaac."""
     import carb
@@ -301,7 +312,7 @@ def _capture(
     import omni.timeline
     import omni.usd
     from PIL import Image
-    from pxr import Gf, UsdGeom, UsdLux, UsdUtils
+    from pxr import UsdGeom, UsdLux, UsdUtils
 
     started = time.perf_counter()
     omni.kit.app.get_app().get_extension_manager().set_extension_enabled_immediate(

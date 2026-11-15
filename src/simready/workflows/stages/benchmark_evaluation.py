@@ -15,22 +15,19 @@ wrapped as "execution succeeded therefore quality passed".
 
 from __future__ import annotations
 
-import copy
-import json
+import importlib
+import shutil
 import time
 from pathlib import Path
 from typing import Any
 
-from simready.core.artifacts import digest, object_digest, read_json, write_json
+from simready.core.artifacts import digest, read_json, write_json
 from simready.core.benchmark_contract import (
-    ContractError,
     validate_evaluation_request,
 )
-from simready.core.types import JsonObject
 from simready.core.validation import require
 from simready.evaluation.verification import verify_candidate
 from simready.workflows.contracts.stage_ledger import StageLedger, stage_identity
-
 
 # ---------------------------------------------------------------------------
 # Render receipt verification
@@ -42,7 +39,7 @@ def _verify_render_receipt(
     *,
     expected_view_ids: set[str],
     expected_resolution: dict[str, int],
-    expected_scene_path: str,
+    expected_scene_id: str,
 ) -> dict[str, Any]:
     """Re-verify a render receipt: view IDs, hashes, resolution, provenance.
 
@@ -125,12 +122,13 @@ def _verify_render_receipt(
         f"Missing views in receipt: {expected_view_ids - seen_ids}",
     )
 
-    # Scene binding must match.
+    # Scene binding must match exactly.
     scene_id = receipt.get("scene_id", "")
+    require(scene_id, "Receipt scene_id must be nonempty")
     require(
-        expected_scene_path in scene_id or scene_id in expected_scene_path,
+        scene_id == expected_scene_id,
         f"Scene binding mismatch: receipt has {scene_id!r}, "
-        f"expected {expected_scene_path!r}",
+        f"expected {expected_scene_id!r}",
     )
 
     return receipt
@@ -170,9 +168,12 @@ def build_candidate(
 
     # Read the render request to get the scene binding.
     render_request_ref = eval_request["render_request"]
-    render_request_path = (evaluation_request_path.parent / render_request_ref["path"]).resolve()
+    render_request_path = (
+        evaluation_request_path.parent / render_request_ref["path"]
+    ).resolve()
     render_request = read_json(render_request_path)
-    scene_path = render_request.get("scene", {}).get("path", "")
+    scene_id = render_request.get("scene", {}).get("path", "")
+    require(scene_id, "Render request must declare a scene path")
 
     # Extract expected views from the view set.
     expected_view_ids = {v["view_id"] for v in view_set["views"]}
@@ -184,7 +185,7 @@ def build_candidate(
         render_receipt_path,
         expected_view_ids=expected_view_ids,
         expected_resolution=expected_resolution,
-        expected_scene_path=scene_path,
+        expected_scene_id=scene_id,
     )
 
     # Build the candidate manifest.
@@ -193,21 +194,41 @@ def build_candidate(
     protocol = eval_request["protocol"]
     protocol_sha256 = protocol["sha256"]
 
-    # Collect view references from the verified receipt.
+    # Collect view references from the verified receipt, copying images into
+    # the candidate directory so the candidate is self-contained.
+    views_dir = output_dir / "views"
+    views_dir.mkdir(parents=True, exist_ok=True)
     candidate_views = []
     for view in receipt["views"]:
+        # Copy RGB into candidate directory and re-hash to verify integrity.
+        src_rgb = render_receipt_path.parent / view["rgb_file"]
+        dst_rgb = views_dir / view["rgb_file"]
+        shutil.copy2(src_rgb, dst_rgb)
+        dst_rgb_sha = digest(dst_rgb)
+        require(
+            dst_rgb_sha == view["rgb_sha256"],
+            f"RGB copy hash mismatch for view {view['view_id']!r}",
+        )
         rgb_ref = {
-            "path": view["rgb_file"],
-            "sha256": view["rgb_sha256"],
+            "path": f"views/{view['rgb_file']}",
+            "sha256": dst_rgb_sha,
         }
         entry: dict[str, Any] = {
             "view_id": view["view_id"],
             "rgb": rgb_ref,
         }
         if view.get("depth_file") is not None:
+            src_depth = render_receipt_path.parent / view["depth_file"]
+            dst_depth = views_dir / view["depth_file"]
+            shutil.copy2(src_depth, dst_depth)
+            dst_depth_sha = digest(dst_depth)
+            require(
+                dst_depth_sha == view["depth_sha256"],
+                f"Depth copy hash mismatch for view {view['view_id']!r}",
+            )
             entry["depth"] = {
-                "path": view["depth_file"],
-                "sha256": view["depth_sha256"],
+                "path": f"views/{view['depth_file']}",
+                "sha256": dst_depth_sha,
             }
         candidate_views.append(entry)
 
@@ -308,7 +329,6 @@ def run_scoring(
         execution_error = str(exc)
         scorecard = None
         defects = None
-        observations = None
 
     elapsed = time.monotonic() - started
 
@@ -318,7 +338,9 @@ def run_scoring(
         "execution_error": execution_error,
         "wall_seconds": round(elapsed, 6),
         "protocol_sha256": protocol_hash,
-        "candidate_sha256": digest(candidate_path) if candidate_path.is_file() else None,
+        "candidate_sha256": digest(candidate_path)
+        if candidate_path.is_file()
+        else None,
         "reuse_mode": "none",
         "reuse_cost": {
             "gpu_seconds": None,
@@ -370,10 +392,10 @@ def run_scoring(
             },
             "implementation": {
                 "evaluation/scoring.py": digest(
-                    Path(__file__).parents[1] / "evaluation" / "scoring.py"
+                    importlib.import_module("simready.evaluation.scoring").__file__
                 ),
                 "evaluation/verification.py": digest(
-                    Path(__file__).parents[1] / "evaluation" / "verification.py"
+                    importlib.import_module("simready.evaluation.verification").__file__
                 ),
             },
         }

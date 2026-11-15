@@ -1,7 +1,5 @@
 """Camera calibration edge cases: distortion, skew, non-square pixels, decoupling."""
 
-import copy
-
 import numpy as np
 import pytest
 

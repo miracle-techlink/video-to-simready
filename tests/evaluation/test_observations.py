@@ -2,10 +2,8 @@
 
 import numpy as np
 import pytest
-from PIL import Image
 
-from simready.core.artifacts import digest, write_json
-from simready.core.evidence import reference
+from simready.core.artifacts import write_json
 from simready.evaluation.observations import (
     depth_metrics,
     image_metrics,
@@ -106,7 +104,12 @@ class TestInstanceMetrics:
 
     def test_critical_missing_counted(self):
         ref = [
-            {"instance_id": "a", "center_px": [10, 10], "category": "button", "critical": True},
+            {
+                "instance_id": "a",
+                "center_px": [10, 10],
+                "category": "button",
+                "critical": True,
+            },
         ]
         result = instance_metrics(ref, [])
         assert result["missing_critical_count"] == 1
@@ -129,9 +132,7 @@ class TestObserve:
         p, c, protocol, candidate, _ = make_scene_candidate(tmp_path)
         candidate["views"] = []  # Remove all views
         write_json(c, candidate)
-        result = observe(
-            protocol, candidate, p.parent, c.parent
-        )
+        result = observe(protocol, candidate, p.parent, c.parent)
         assert any(i["code"] == "MISSING_VIEW" for i in result["issues"])
         assert result["metrics"]["coverage.observation_fraction"] == 0.0
 

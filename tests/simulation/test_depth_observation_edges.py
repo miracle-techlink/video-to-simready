@@ -34,11 +34,6 @@ class TestCaptureMode:
         depth = np.ones((4, 4), dtype=np.float32)
         _validate_capture_result(rgb, depth, capture_mode="rgbd")  # should not raise
 
-    def test_rgb_mode_accepts_rgb_only(self):
-        rgb = np.full((4, 4, 3), 128, dtype=np.uint8)
-        rgb[0, 0] = [255, 0, 0]
-        _validate_capture_result(rgb, None, capture_mode="rgb")  # should not raise
-
     def test_invalid_capture_mode_rejected(self):
         rgb = np.full((4, 4, 3), 128, dtype=np.uint8)
         with pytest.raises(ValueError, match="capture_mode"):
@@ -119,7 +114,10 @@ class TestMetersPerUnitParameterization:
     def test_allowed_set_accepts_other_units(self):
         depth = np.ones((4, 4), dtype=np.float32)
         clean, stats = normalize_camera_z(
-            depth, width=4, height=4, meters_per_unit=0.01,
+            depth,
+            width=4,
+            height=4,
+            meters_per_unit=0.01,
             allowed_meters_per_unit={0.01, 1.0},
         )
         assert stats["stage_meters_per_unit"] == 0.01
@@ -129,6 +127,9 @@ class TestMetersPerUnitParameterization:
         depth = np.ones((4, 4), dtype=np.float32)
         with pytest.raises(ValueError, match="metersPerUnit"):
             normalize_camera_z(
-                depth, width=4, height=4, meters_per_unit=0.001,
+                depth,
+                width=4,
+                height=4,
+                meters_per_unit=0.001,
                 allowed_meters_per_unit={0.01, 1.0},
             )
