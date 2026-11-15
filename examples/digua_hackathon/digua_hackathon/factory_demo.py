@@ -117,6 +117,26 @@ def _repoint_iris_materials(stage, iris_root: str, materials_dir: Path) -> int:
     return count
 
 
+
+
+def _zero_saved_velocities(stage, root: str) -> int:
+    """Zero physics:linearVelocity / physics:angularVelocity under root."""
+    from pxr import UsdPhysics
+
+    count = 0
+    for prim in stage.Traverse():
+        if not str(prim.GetPath()).startswith(root):
+            continue
+        if not prim.HasAPI(UsdPhysics.RigidBodyAPI):
+            continue
+        for name in ("physics:linearVelocity", "physics:angularVelocity"):
+            attr = prim.GetAttribute(name)
+            if attr and attr.Get() not in (None, (0.0, 0.0, 0.0)):
+                attr.Set((0.0, 0.0, 0.0))
+                count += 1
+    return count
+
+
 def build_factory_stage(stage, factory_usd: Path, iris_usd: Path, start: np.ndarray) -> dict:
     """Assemble factory (0.01-scaled reference) + Iris (1.0) in a meter stage."""
     from pxr import Gf, UsdGeom, UsdPhysics
@@ -365,6 +385,10 @@ def _simulate(args: argparse.Namespace, settings: dict, app) -> None:
     rotor_paths = ["/World/Iris/vehicle/rotor0", "/World/Iris/vehicle/rotor1",
                    "/World/Iris/vehicle/rotor2", "/World/Iris/vehicle/rotor3"]
     rotors = [RigidPrim(pth, max_contact_count=0) for pth in rotor_paths]
+    # zero the asset's saved nonzero velocities at USD level (authoritative;
+    # angularVelocity in USD is deg/s) before physics initialization
+    zeroed = _zero_saved_velocities(stage, "/World/Iris")
+    print(f"[{now_iso()}] velocities zeroed on {zeroed} rigid bodies", flush=True)
     SimulationManager.enable_fabric(False)
     SimulationManager.set_physics_dt(PHYSICS_DT)
     SimulationManager.initialize_physics()

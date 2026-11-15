@@ -9,10 +9,12 @@ from digua_hackathon.iris_spec import IRIS_SPEC, mixer_from_hubs, rotor_hubs
 
 
 def test_hubs_match_pinned_asset():
+    """Hub centers from the astra-integration-audit table (body frame)."""
     hubs = rotor_hubs()
     assert hubs.shape == (4, 3)
-    assert np.isclose(hubs[0][0], -0.20673409, atol=1e-6)
-    assert np.isclose(hubs[1][1], 0.12500195, atol=1e-6)
+    assert np.isclose(hubs[0][0], 0.137985, atol=1e-6)
+    assert np.isclose(hubs[1][1], 0.218754, atol=1e-6)
+    assert np.isclose(hubs[3][1], -0.222346, atol=1e-6)
     span = np.abs(hubs[:, :2]).max()
     assert 0.1 < span < 0.3, "Iris wheelbase ~0.5 m expected"
 

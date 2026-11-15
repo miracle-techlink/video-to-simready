@@ -23,13 +23,15 @@ import numpy as np
 
 from .controller import DroneSpec
 
-# rotor hubs in the body frame, straight from the joint localPos0 values
+# rotor hub local centers in the BODY frame — from the rotor Xform translates
+# (astra-integration-audit table; the joint localPos0 values live in the
+# rotated body0 joint frame and must NOT be used directly for mixing)
 ROTOR_HUBS = np.array(
     [
-        [-0.20673409, -0.1375972, 0.023],   # rotor0 (prop ccw)
-        [0.21869345, 0.12500195, 0.023],    # rotor1 (prop ccw, hub frame rotated 90 deg)
-        [0.2032209, -0.13830696, 0.023],    # rotor2 (prop cw)
-        [-0.219, 0.126, 0.023],             # rotor3 (prop cw), joint3 localPos
+        [0.137985, -0.206716, 0.023],   # rotor0 (mesh iris_prop_ccw)
+        [-0.125112, 0.218754, 0.023],   # rotor1 (mesh iris_prop_ccw, +90 deg frame)
+        [0.138, 0.202576, 0.023],       # rotor2 (mesh iris_prop_cw)
+        [-0.124154, -0.222346, 0.023],  # rotor3 (mesh iris_prop_cw)
     ]
 )
 
@@ -43,11 +45,13 @@ IRIS_SPEC = DroneSpec(
     envelope=(0.55, 0.55, 0.25),
     prop_radius=0.095,
     inertia_diag=(0.029125, 0.029125, 0.055225),
+    # total flight mass incl. rotors is queried at runtime (rotor masses are
+    # density-derived, body 1.5 kg is authored); spec value is the fallback
     name="3dr_iris_pegasus_e13dc65",
 )
 
 IRIS_PRIM_PATH = "/World/Iris/vehicle"
-IRIS_BODY_LINK = "/World/Iris/vehicle/body/body"
+IRIS_BODY_LINK = "/World/Iris/vehicle/body"  # authored rigid body (audit); mesh child only collides
 IRIS_ROTOR_PRIMS = [f"/World/Iris/vehicle/rotor{i}" for i in range(4)]
 
 
