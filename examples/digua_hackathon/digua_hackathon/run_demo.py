@@ -171,10 +171,22 @@ def _simulate(args: argparse.Namespace, settings: dict, app: object) -> dict[str
     }.items():
         carb.settings.get_settings().set(key, value)
 
-    stage_path = str((args.out / "assets" / "demo_stage.usda").resolve())
-    if not omni.usd.get_context().open_stage(stage_path):
-        raise RuntimeError(f"could not open stage {stage_path}")
-    stage = omni.usd.get_context().get_stage()
+    # Runtime assembly (not a pre-composed stage file): composed/referenced
+    # stages freeze physics-driven rendering on this Isaac build; prims
+    # authored in-session animate correctly (validated pattern from prior
+    # Isaac work; see README limitations).
+    from .usd_builder import build_drone, build_substation
+
+    ctx = omni.usd.get_context()
+    ctx.new_stage()
+    stage = ctx.get_stage()
+    stage.SetMetadata("upAxis", "Z")
+    stage.SetMetadata("metersPerUnit", 1.0)
+    from pxr import UsdGeom as _ug
+
+    _ug.Xform.Define(stage, "/World")
+    build_substation(stage)
+    build_drone(stage, args.drone_path, MISSION_WAYPOINTS[0].position)
     drone_prim = stage.GetPrimAtPath(args.drone_path)
     if not drone_prim or not drone_prim.IsA(UsdGeom.Xform):
         raise RuntimeError(f"drone prim missing: {args.drone_path}")
@@ -195,15 +207,17 @@ def _simulate(args: argparse.Namespace, settings: dict, app: object) -> dict[str
     chase.CreateClippingRangeAttr(Gf.Vec2f(0.05, 2000.0))
     chase_translate = UsdGeom.Xformable(chase.GetPrim()).AddTransformOp()
 
-    fpv_prim = stage.GetPrimAtPath(f"{args.drone_path}/FPVCamera")
-    if not fpv_prim or not fpv_prim.IsA(UsdGeom.Camera):
-        raise RuntimeError("FPV camera missing from drone asset")
-    fpv = UsdGeom.Camera(fpv_prim)
+    # FPV camera authored in WORLD space and driven per frame from the
+    # simulated drone pose (child-of-rigid-body cameras froze on this build)
+    fpv = UsdGeom.Camera.Define(stage, "/World/Cameras/FPV")
+    fpv.CreateFocalLengthAttr(2.79)
+    fpv.CreateHorizontalApertureAttr(3.896)
     fpv.CreateVerticalApertureAttr(3.896 * height / width)
     fpv.CreateClippingRangeAttr(Gf.Vec2f(0.05, 2000.0))
+    fpv_translate = UsdGeom.Xformable(fpv.GetPrim()).AddTransformOp()
 
     product_chase = rep.create.render_product(str(chase.GetPath()), (width, height))
-    product_fpv = rep.create.render_product(str(fpv_prim.GetPath()), (width, height))
+    product_fpv = rep.create.render_product(str(fpv.GetPath()), (width, height))
 
     frames_chase_dir = args.out / f"frames_{args.mode}_chase"
     frames_fpv_dir = args.out / f"frames_{args.mode}_fpv"
@@ -347,6 +361,14 @@ def _simulate(args: argparse.Namespace, settings: dict, app: object) -> dict[str
             if op is not None:
                 op.Set(rotor_spin if i % 2 == 0 else -rotor_spin)
 
+        # drive the FPV camera from the simulated pose: mount offset in body
+        # frame (nose pod) looking forward +20 deg down
+        p_f, _, _, _, rot_f = drone_state()
+        eye_f = p_f + rot_f @ np.array([0.21, 0.0, -0.055])
+        fwd_f = rot_f @ np.array([0.9397, 0.0, -0.3420])  # Ry(-70 deg) @ -z
+        up_f = rot_f @ np.array([0.0, 0.0, 1.0])
+        fpv_translate.Set(_look_at(eye_f, eye_f + fwd_f, up_f))
+
         carb.settings.get_settings().set("/rtx-transient/post/dlss/forceParamReset", True)
         rep.orchestrator.step(
             rt_subframes=settings["rt_subframes"], delta_time=0.0, pause_timeline=False
@@ -363,14 +385,13 @@ def _simulate(args: argparse.Namespace, settings: dict, app: object) -> dict[str
                      wall_s, total_frames, width, height)
 
 
-def _look_at(eye: np.ndarray, target: np.ndarray):
+def _look_at(eye: np.ndarray, target: np.ndarray, up: np.ndarray | None = None):
     from pxr import Gf
 
+    up_vec = Gf.Vec3d(*(map(float, up) if up is not None else (0, 0, 1)))
     return (
         Gf.Matrix4d()
-        .SetLookAt(
-            Gf.Vec3d(*map(float, eye)), Gf.Vec3d(*map(float, target)), Gf.Vec3d(0, 0, 1)
-        )
+        .SetLookAt(Gf.Vec3d(*map(float, eye)), Gf.Vec3d(*map(float, target)), up_vec)
         .GetInverse()
     )
 
@@ -473,8 +494,8 @@ def main(argv: list[str] | None = None) -> int:
         manifest = generate_assets(args.out)
         print(json.dumps(manifest["stage"], indent=2))
         return 0
-    if not (args.out / "assets" / "demo_stage.usda").exists():
-        raise SystemExit("assets missing; run with --generate-assets first")
+    if not (args.out / "assets" / "assets_manifest.json").exists():
+        raise SystemExit("asset manifest missing; run with --generate-assets first")
     run_isaac(args)
     return 0
 
