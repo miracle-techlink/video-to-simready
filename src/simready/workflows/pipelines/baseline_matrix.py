@@ -2,6 +2,23 @@
 
 Input declarations and raw-file checks establish identity, not independent proof
 of training isolation or render provenance. Synthetic fixtures test interfaces.
+
+Candidate modes (set per member via ``candidate_source``):
+
+- ``external``: candidate manifest must exist at planning time; its content is
+  frozen and re-verified. This is the pre-PR4 behaviour.
+- ``auto``: the render contract, view set and evaluation protocol are frozen at
+  planning time; at execution time, after the reconstruction stage completes,
+  the benchmark renderer produces a fresh receipt, a candidate is built from
+  that receipt, and independent scoring is run. The candidate identity is
+  bound to actual artifacts, not to a planned file that did not yet exist.
+- ``reconstruction_only``: ``--until reconstruction`` semantics; no render or
+  scoring is attempted. Quality is reported as ``NOT_EVALUATED`` with an
+  explicit reason.
+
+The matrix never ranks members or promotes a backend. Aggregation across
+scenes is delegated to ``benchmark_suite.py``; this module remains
+single-scene.
 """
 
 from __future__ import annotations
@@ -10,9 +27,11 @@ import argparse
 import copy
 import json
 import re
+import shutil
+import time
 from pathlib import Path
 
-from simready.core.artifacts import object_digest, read_json, write_json
+from simready.core.artifacts import digest, object_digest, read_json, write_json
 from simready.core.evidence import ensure_unchanged, reference, resolve_ref
 from simready.core.reconstruction_contract import verify_bundle
 from simready.core.validation import number
@@ -22,6 +41,14 @@ from simready.execution.processes.local import ProcessCancelledError
 from simready.workflows.contracts.stage_ledger import failure_status
 from simready.workflows.pipelines.video_pipeline import execute_video, make_plan
 from simready.workflows.planning.pipeline_spec import fields, load_pipeline
+from simready.workflows.stages.benchmark_evaluation import (
+    build_candidate,
+    run_scoring,
+)
+
+# ---------------------------------------------------------------------------
+# Helpers (unchanged from pre-PR4)
+# ---------------------------------------------------------------------------
 
 
 def _references(value, base):
@@ -98,6 +125,84 @@ def comparison_status(members, mode, camera_evidence):
     }
 
 
+# ---------------------------------------------------------------------------
+# Planning
+# ---------------------------------------------------------------------------
+
+_CANDIDATE_MODES = {"external", "auto"}
+_RENDER_CONTRACT_FIELDS = {
+    "scene",
+    "view_set",
+    "renderer",
+    "image_settings",
+    "lighting",
+    "seed",
+    "budget",
+}
+
+
+def _freeze_render_contract(raw, config):
+    """Freeze the auto-candidate render contract: scene, views, renderer identity.
+
+    Only files that already exist are frozen; the reconstruction binding is
+    deliberately absent because in auto mode the artifact is produced during
+    execution and is bound only afterwards (handover PR 4).
+    """
+    from simready.core.benchmark_contract import validate_view_set
+
+    contract = fields(raw, _RENDER_CONTRACT_FIELDS, "render_contract")
+    scene_path = resolve_ref(contract["scene"], config.parent)
+    scene_ref = reference(scene_path)
+    view_set_path = resolve_ref(contract["view_set"], config.parent)
+    view_set_ref = reference(view_set_path)
+    view_set = validate_view_set(read_json(view_set_path), view_set_path.parent)
+    frozen = [scene_ref, view_set_ref, *_references(view_set, view_set_path.parent)]
+    declaration = {
+        key: copy.deepcopy(contract[key])
+        for key in ("renderer", "image_settings", "lighting", "seed", "budget")
+    }
+    declaration["scene"] = {"path": scene_ref["path"], "sha256": scene_ref["sha256"]}
+    declaration["view_set"] = {
+        "path": view_set_ref["path"],
+        "sha256": view_set_ref["sha256"],
+    }
+    return {"declaration": declaration, "frozen": frozen}
+
+
+def _freeze_candidate_source(raw, config, protocol, protocol_ref):
+    """Validate and freeze a member's ``candidate_source`` declaration.
+
+    Returns ``(mode, candidate_ref, frozen_extra)``. ``candidate_ref`` is
+    only non-None for ``external`` mode.
+    """
+    if raw is None:
+        # No candidate source declared → external with no candidate (legacy).
+        return "external", None, []
+    fields(raw, {"mode", "reference"}, "candidate_source")
+    mode = raw.get("mode", "external")
+    if mode not in _CANDIDATE_MODES:
+        raise ValueError(f"Unknown candidate_source mode: {mode!r}")
+    if mode == "external":
+        if raw.get("reference") is None:
+            return "external", None, []
+        if protocol is None:
+            raise ValueError(
+                "External candidate evidence requires a shared evaluation protocol"
+            )
+        candidate_path = resolve_ref(raw["reference"], config.parent)
+        candidate_ref = reference(candidate_path)
+        candidate = read_json(candidate_path)
+        validate_candidate(candidate, protocol_ref["sha256"], protocol)
+        extra = [candidate_ref, *_references(candidate, candidate_path.parent)]
+        return "external", candidate_ref, extra
+    # auto mode: no pre-existing reference allowed.
+    if raw.get("reference") is not None:
+        raise ValueError("Auto candidate source must not bind a pre-existing reference")
+    if protocol is None:
+        raise ValueError("Auto candidate requires a shared evaluation protocol")
+    return "auto", None, []
+
+
 def plan_matrix(
     config,
     output,
@@ -129,7 +234,7 @@ def plan_matrix(
     video = reference(resolve_ref(raw.get("video"), config.parent))
     evaluation = fields(
         raw.get("evaluation", {}),
-        {"protocol", "camera_evidence", "timeout_s"},
+        {"protocol", "camera_evidence", "timeout_s", "render_contract"},
         "evaluation",
     )
     timeout = evaluation.get("timeout_s", 300)
@@ -137,6 +242,7 @@ def plan_matrix(
         raise ValueError("Evaluation timeout must be positive")
     frozen = [reference(config), video]
     protocol_ref = camera_ref = protocol = None
+    render_contract = None
     if evaluation.get("protocol") is not None:
         protocol_path = resolve_ref(evaluation["protocol"], config.parent)
         protocol_ref = reference(protocol_path)
@@ -147,12 +253,15 @@ def plan_matrix(
             resolve_ref(evaluation["camera_evidence"], config.parent)
         )
         frozen.append(camera_ref)
+    if evaluation.get("render_contract") is not None:
+        render_contract = _freeze_render_contract(evaluation["render_contract"], config)
+        frozen += render_contract["frozen"]
     rows = raw.get("members")
     if not isinstance(rows, list) or len(rows) < 2:
         raise ValueError("Matrix requires at least two members")
     members, names = [], set()
     for row in rows:
-        fields(row, {"id", "pipeline", "candidate"}, "member")
+        fields(row, {"id", "pipeline", "candidate", "candidate_source"}, "member")
         name = row.get("id")
         if (
             not isinstance(name, str)
@@ -173,8 +282,15 @@ def plan_matrix(
         plan = make_plan(args)
         if plan["source_video_sha256"] != video["sha256"]:
             raise ValueError("Every matrix member must use the same frozen video")
-        candidate_ref = None
-        if row.get("candidate") is not None:
+
+        # Resolve candidate source: explicit per-member "candidate_source" wins;
+        # otherwise the legacy "candidate" key implies external mode.
+        if "candidate_source" in row:
+            cand_mode, candidate_ref, extra = _freeze_candidate_source(
+                row["candidate_source"], config, protocol, protocol_ref
+            )
+        elif row.get("candidate") is not None:
+            cand_mode = "external"
             if protocol is None:
                 raise ValueError(
                     "Candidate evidence requires a shared evaluation protocol"
@@ -183,13 +299,22 @@ def plan_matrix(
             candidate_ref = reference(candidate_path)
             candidate = read_json(candidate_path)
             validate_candidate(candidate, protocol_ref["sha256"], protocol)
-            frozen += [candidate_ref, *_references(candidate, candidate_path.parent)]
+            extra = [candidate_ref, *_references(candidate, candidate_path.parent)]
+        else:
+            cand_mode, candidate_ref, extra = "external", None, []
+        if cand_mode == "auto" and render_contract is None:
+            raise ValueError(
+                "Auto candidate source requires a frozen evaluation.render_contract"
+            )
+        frozen += extra
+
         frozen += [pipeline_ref, *_references(plan, path.parent)]
         members.append(
             {
                 "id": name,
                 "pipeline": pipeline_ref,
                 "candidate": candidate_ref,
+                "candidate_mode": cand_mode,
                 "plan": plan,
             }
         )
@@ -217,6 +342,9 @@ def plan_matrix(
             "camera_evidence": camera_ref,
             "timeout_s": timeout,
             "protocol_is_caller_supplied": True,
+            "render_contract": (
+                render_contract["declaration"] if render_contract else None
+            ),
         },
         "comparison": comparison_status(members, mode, camera_ref),
         "ranking": None,
@@ -224,6 +352,11 @@ def plan_matrix(
     }
     manifest["identity"] = object_digest(manifest)
     return manifest
+
+
+# ---------------------------------------------------------------------------
+# Quality evaluation — external candidate (pre-PR4 path)
+# ---------------------------------------------------------------------------
 
 
 def _quality(member, manifest, directory, reconstruction):
@@ -317,6 +450,191 @@ def _quality(member, manifest, directory, reconstruction):
     }
 
 
+# ---------------------------------------------------------------------------
+# Quality evaluation — auto candidate (render + build + score)
+# ---------------------------------------------------------------------------
+
+
+def render_auto_observations(contract, view_set_path, reconstruction, directory):
+    """Materialize a render request bound to the actual reconstruction and render.
+
+    The planning-time contract froze the renderer identity, scene, view set
+    and scoring inputs; the reconstruction binding is added here, after the
+    artifact exists. Everything is written into ``directory`` as a
+    self-contained, contract-valid bundle (scene/view set/reconstruction
+    copies plus ``render_request.json``), so no frozen input is rewritten and
+    no future file is read. Returns the render request and receipt paths.
+    """
+    from simready.core.benchmark_contract import validate_render_request
+    from simready.simulation.benchmark_observation import (
+        plan_benchmark_observation,
+        run_benchmark_observation,
+    )
+
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    scene_src = Path(contract["scene"]["path"])
+    ply_src = Path(reconstruction["ply_path"])
+    shutil.copy2(scene_src, directory / scene_src.name)
+    shutil.copy2(view_set_path, directory / "view_set.json")
+    shutil.copy2(ply_src, directory / ply_src.name)
+    request = {
+        "schema_version": 1,
+        "kind": "render_request",
+        "request_id": f"auto-{directory.name}",
+        "scene": {"path": scene_src.name, "sha256": digest(scene_src)},
+        "reconstruction": {"path": ply_src.name, "sha256": digest(ply_src)},
+        "view_set": {"path": "view_set.json", "sha256": digest(view_set_path)},
+        "renderer": copy.deepcopy(contract["renderer"]),
+        "image_settings": copy.deepcopy(contract["image_settings"]),
+        "lighting": copy.deepcopy(contract["lighting"]),
+        "seed": contract["seed"],
+        "budget": copy.deepcopy(contract["budget"]),
+    }
+    request_path = directory / "render_request.json"
+    write_json(request_path, request)
+    validate_render_request(read_json(request_path), request_path.parent)
+    plan = plan_benchmark_observation(
+        request_path, directory / "view_set.json", directory / "render"
+    )
+    run_benchmark_observation(plan)
+    return request_path, directory / "render" / "receipt.json"
+
+
+def _quality_auto(member, manifest, directory, reconstruction):
+    """Render, assemble the candidate from the verified receipt, then score.
+
+    Planning froze the render contract (renderer identity, scene, view set),
+    the scoring protocol and the timeout. Here the reconstruction has already
+    completed and been hash-checked by the stage ledger; the render request is
+    materialized with the actual reconstruction binding, the renderer runs,
+    ``build_candidate`` re-verifies every view/hash/scene binding from the
+    receipt, and only then is the candidate frozen and scored in a fresh
+    verifier process. Execution and quality statuses stay separate.
+    """
+    evaluation = manifest["evaluation"]
+    unknown = {
+        "status": "NOT_EVALUATED",
+        "reason": "Auto candidate evaluation requires quality_comparison purpose",
+    }
+    contract = evaluation.get("render_contract")
+    if manifest["purpose"] != "quality_comparison" or not evaluation["protocol"]:
+        return unknown
+    if not contract:
+        return {
+            **unknown,
+            "reason": "Auto candidate requires a frozen render contract",
+        }
+    ensure_unchanged(manifest["frozen_references"])
+
+    directory.mkdir(parents=True, exist_ok=True)
+    request_path, receipt_path = render_auto_observations(
+        contract,
+        Path(contract["view_set"]["path"]),
+        reconstruction,
+        directory / "render-input",
+    )
+    if not receipt_path.is_file():
+        raise ValueError("Benchmark renderer produced no receipt")
+
+    view_set = read_json(Path(contract["view_set"]["path"]))
+    evaluation_request_path = _write_evaluation_request(
+        directory, request_path, evaluation["protocol"], member["id"]
+    )
+    candidate_path = build_candidate(
+        receipt_path,
+        evaluation_request_path,
+        view_set,
+        directory / "candidate",
+        model_artifacts=[
+            {
+                "artifact_id": "reconstruction",
+                "path": str(Path(reconstruction["ply_path"])),
+                "sha256": reconstruction["ply_sha256"],
+            }
+        ],
+    )
+
+    scoring_result = run_scoring(
+        Path(evaluation["protocol"]["path"]),
+        candidate_path,
+        directory / "scoring",
+        timeout=evaluation["timeout_s"],
+    )
+    scorecard_path = directory / "scoring" / "scorecard.json"
+    return {
+        "status": "MEASURED",
+        "scorecard": reference(scorecard_path) if scorecard_path.is_file() else None,
+        "verifier_status": scoring_result.get("quality_status", "UNKNOWN"),
+        "feedback_status": "DEVELOPMENT"
+        if scoring_result.get("defects_available")
+        else "WITHHELD",
+        "independently_checked": "Render receipt verified, candidate assembled, verifier recomputed metrics",
+        "caller_declared": "Training access, camera correspondence and render provenance",
+        "release_authorized": False,
+    }
+
+
+def _write_evaluation_request(directory, render_request_path, protocol_ref, request_id):
+    """Write an evaluation_request manifest referencing the materialized request."""
+    from simready.core.benchmark_contract import validate_evaluation_request
+
+    directory.mkdir(parents=True, exist_ok=True)
+    er = {
+        "schema_version": 1,
+        "kind": "evaluation_request",
+        "request_id": f"auto-{request_id}",
+        "protocol": {
+            "name": "auto",
+            "version": "1.0",
+            "sha256": protocol_ref["sha256"],
+        },
+        "candidate_source": {"mode": "auto"},
+        "scorer": {
+            "name": "simready-scorer",
+            "version": "1.0",
+            "code_sha256": digest(Path(__file__)),
+        },
+        "deadline": "2026-12-31",
+        "render_request": {
+            "path": str(
+                Path(render_request_path).relative_to(Path(directory).resolve())
+            ),
+            "sha256": digest(render_request_path),
+        },
+    }
+    path = directory / "evaluation_request.json"
+    write_json(path, er)
+    # Validate so a contract violation here fails before any candidate exists.
+    validate_evaluation_request(read_json(path), path.parent)
+    return path
+
+
+# ---------------------------------------------------------------------------
+# Execution
+# ---------------------------------------------------------------------------
+
+
+def _artifact_refs(member, quality, evaluation_dir):
+    """Collect existing candidate/render-receipt/scorecard references for a row."""
+    refs = {
+        "candidate": member["candidate"]["path"] if member["candidate"] else None,
+        "render_receipt": None,
+        "scorecard": None,
+    }
+    if member["candidate_mode"] == "auto":
+        candidate = evaluation_dir / "candidate" / "candidate.json"
+        if candidate.is_file():
+            refs["candidate"] = str(candidate)
+        render_receipt = evaluation_dir / "render-input" / "render" / "receipt.json"
+        if render_receipt.is_file():
+            refs["render_receipt"] = str(render_receipt)
+    scorecard = quality.get("scorecard") if isinstance(quality, dict) else None
+    if isinstance(scorecard, dict):
+        refs["scorecard"] = scorecard.get("path")
+    return refs
+
+
 def execute_matrix(manifest):
     """Run frozen members in order, preserving failed and interrupted rows."""
     root = Path(manifest["out"])
@@ -344,6 +662,7 @@ def execute_matrix(manifest):
                 "id": member["id"],
                 "status": "NOT_RUN",
                 "quality": {"status": "NOT_EVALUATED"},
+                "candidate_mode": member["candidate_mode"],
             }
             for member in manifest["members"]
         ],
@@ -351,6 +670,7 @@ def execute_matrix(manifest):
     write_json(root / "matrix-result.json", report)
     try:
         for member, row in zip(manifest["members"], report["members"], strict=True):
+            started = time.monotonic()
             try:
                 ensure_unchanged(manifest["frozen_references"])
                 args = load_pipeline(
@@ -390,11 +710,25 @@ def execute_matrix(manifest):
                         Path(member["plan"]["out"]) / "stages/reconstruction.json"
                     )
                     row["reconstruction"] = receipt["result"]
-                    row["quality"] = _quality(
-                        member,
-                        manifest,
-                        root / "evaluation" / member["id"],
-                        receipt["result"],
+                    evaluation_dir = root / "evaluation" / member["id"]
+                    if member["candidate_mode"] == "auto":
+                        row["quality"] = _quality_auto(
+                            member,
+                            manifest,
+                            evaluation_dir,
+                            receipt["result"],
+                        )
+                    else:
+                        row["quality"] = _quality(
+                            member,
+                            manifest,
+                            evaluation_dir,
+                            receipt["result"],
+                        )
+                    # Record artifact references only for files that exist;
+                    # a missing artifact is never fabricated.
+                    row["artifacts"] = _artifact_refs(
+                        member, row["quality"], evaluation_dir
                     )
                     ensure_unchanged(manifest["frozen_references"])
             except BaseException as error:
@@ -412,6 +746,7 @@ def execute_matrix(manifest):
                 }:
                     raise
             finally:
+                row["wall_seconds"] = round(time.monotonic() - started, 6)
                 write_json(root / "matrix-result.json", report)
         report["status"] = (
             "COMPLETE"
@@ -434,6 +769,11 @@ def execute_matrix(manifest):
         }
         write_json(root / "matrix-result.json", report)
     return report
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
 
 
 def main(argv=None):

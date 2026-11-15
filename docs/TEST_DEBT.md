@@ -30,10 +30,10 @@
 | 7 | assets/association | `semantic_projection.py` | 504 | ⚠️ | `tests/assets/test_semantic_projection.py` | PR 3 | ☐ |
 | 8 | assets/compilation | `collision_geometry / scene_preparation / spec_validation / usd_layers` | 776 | ❌ | `tests/assets/test_compilation.py` | PR 3 | ☐ |
 | 9 | assets/physics | `category_priors / physical_authoring / physical_spec` | 540 | ⚠️ | 补入 `tests/assets/test_physical_spec.py`（与 simulation 侧呼应） | PR 2/3 | ☐ |
-| 10 | execution/processes | `cancellation / local / remote_polling / supervision` | 424 | ⚠️ | `tests/execution/test_processes_edges.py` | PR 4 | ☐ |
-| 11 | execution/resources | `gpu_capability / resource_pool` | 296 | ❌ | `tests/execution/test_resources.py` | PR 4 | ☐ |
-| 12 | workflows/stages | `semantic_stage / video_execution` | ~300 | ⚠️ | `tests/workflows/test_stages_edges.py` | PR 4 | ☐ |
-| 13 | workflows/planning | `pipeline_spec / video_contracts` | ~400 | ⚠️ | `tests/workflows/test_planning_schema.py` | PR 4 | ☐ |
+| 10 | execution/processes | `cancellation / local / remote_polling / supervision` | 424 | ⚠️ | `tests/execution/test_processes_edges.py` | PR 4 | ☑ |
+| 11 | execution/resources | `gpu_capability / resource_pool` | 296 | ❌ | `tests/execution/test_resources.py` | PR 4 | ☑ |
+| 12 | workflows/stages | `semantic_stage / video_execution` | ~300 | ⚠️ | `tests/workflows/test_stages_edges.py` | PR 4 | ☑ |
+| 13 | workflows/planning | `pipeline_spec / video_contracts` | ~400 | ⚠️ | `tests/workflows/test_planning_schema.py` | PR 4 | ☑ |
 | 14 | simulation | `camera_calibration / depth_observation / scene_preparation / gaussian_asset / physical_spec` 边界 | ~1500 | ⚠️ | `tests/simulation/test_camera_calibration_edges.py` `test_depth_observation_edges.py` `test_scene_preparation_edges.py` `test_gaussian_asset.py` `test_physical_spec.py` | PR 2 | ☐ |
 
 ### 1.1 各测试文件关键测试点
@@ -119,7 +119,7 @@
 | PR 1 | 7（core×3 + geometry×3 + CLI×1） | ☐ |
 | PR 2 | 5（simulation 边界×5） | ☐ |
 | PR 3 | 8（evaluation×2 + inspection×5 + assets×3 — `test_physical_spec.py` 与 PR 2 呼应） | ☐ |
-| PR 4 | 4（execution×2 + workflows×2） | ☐ |
+| PR 4 | 4（execution×2 + workflows×2）+ suite 自身 1（`tests/workflows/test_benchmark_suite.py`） | ☑（4 项债务测试全绿；PR 4 合入后按惯例回填 1–3 行） |
 | PR 5 | 0（仅 CI/wheel 骨架，无新测试债务清算） | ☐ |
 | PR 6（下轮） | 5（真实模型推理×5） | ☐ |
 
