@@ -127,7 +127,9 @@ The agent reads the image and state, writes a bounded target, then receives the
 next state/image and measured action feedback. The server pilot verified this
 loop on the L40/Isaac Sim 6.2 with two small joint1 moves; the measured target
 error was below 0.002 rad. It stores RGB observations, JSON state, and the exact
-command/event trace, not a video. This file handoff is intended for the first
+command/event trace, not a video. An out-of-limit test target was rejected and
+returned with the reason; a subsequent valid target was accepted, so one bad
+action does not kill the session. This file handoff is intended for the first
 Astra-in-the-loop canary; replace it with a scoped tool service for concurrent
 users. The current canary demonstrates the Code-as-Policy control boundary, but
 does not launch an Astra model/API session itself or solve a task autonomously.

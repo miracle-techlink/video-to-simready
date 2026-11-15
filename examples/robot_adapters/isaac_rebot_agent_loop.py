@@ -206,9 +206,6 @@ def main() -> int:
                 valid_for_s=10.0,
                 sequence=sequence,
             )
-            validate_joint_command(
-                profile, command, now_monotonic_ns=time.monotonic_ns()
-            )
             # Replicator may leave the physics timeline paused after publishing
             # an RGB frame. Re-arm physics and the articulation tensor view
             # before reading feedback or applying the next policy action.
@@ -218,12 +215,32 @@ def main() -> int:
             # initialize() is idempotent on this Isaac 6.2 legacy wrapper and
             # recreates its tensor view after a paused timeline.
             robot.initialize()
-            current = adapter.get_state().positions
-            deltas = {joint: abs(positions[joint] - current[joint]) for joint in names}
-            if max(deltas.values(), default=0) > args.max_joint_step:
-                raise ValueError(
-                    f"action exceeds per-joint delta cap {args.max_joint_step} rad: {deltas}"
+            try:
+                validate_joint_command(
+                    profile, command, now_monotonic_ns=time.monotonic_ns()
                 )
+                current = adapter.get_state().positions
+                deltas = {
+                    joint: abs(positions[joint] - current[joint]) for joint in names
+                }
+                if max(deltas.values(), default=0) > args.max_joint_step:
+                    raise ValueError(
+                        f"action exceeds per-joint delta cap {args.max_joint_step} rad: {deltas}"
+                    )
+            except ValueError as error:
+                event = {
+                    "sequence": sequence,
+                    "accepted": False,
+                    "target": positions,
+                    "reason": str(error),
+                }
+                with events_path.open("a", encoding="utf-8") as stream:
+                    stream.write(json.dumps(event) + "\n")
+                archived = args.run_dir / f"command-{sequence:03d}.json"
+                command_path.replace(archived)
+                publish_observation(sequence, event)
+                print(json.dumps({"event": "ACTION_REJECTED", **event}), flush=True)
+                continue
             receipt = adapter.send_joint_position(command)
             for _ in range(max(0, args.ticks_per_action - 1)):
                 # Keep stepping through World so the legacy articulation's
