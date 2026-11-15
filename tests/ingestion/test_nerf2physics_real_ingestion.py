@@ -270,30 +270,35 @@ def test_method_provenance_records_pinned_commit(real_assets, real_request, tmp_
     assert method["upstream_commit"] == real_assets["commit"]
     assert method["upstream_repository"] == REPOSITORY
     assert method["license"] == "MIT"
-    # The adapter currently hard-codes this flag False for every mode. That
-    # is correct for official_prediction_replay / synthetic_fixture but wrong
-    # for feature_regression over a real cache; the dedicated test below
-    # asserts the contract and fails until the adapter distinguishes modes.
-    assert method["new_visual_inference_performed"] in {True, False}
+    # feature_regression replays cached CLIP features through a CPU regression
+    # head; it does NOT encode new images, so the new-visual-inference flag
+    # stays False even when regression ran.
+    assert method["feature_regression_performed"] is True
+    assert method["new_visual_inference_performed"] is False
 
 
-def test_new_visual_inference_flag_is_true(real_assets, real_request, tmp_path):
-    """feature_regression over a real cache must declare new visual inference.
+def test_visual_inference_flags_distinguish_regression_from_encoding(
+    real_assets, real_request, tmp_path
+):
+    """feature_regression over a real cache: regression ran, but no new image encoding.
 
-    The current adapter hard-codes ``new_visual_inference_performed=False``
-    for every mode. That is correct for ``official_prediction_replay`` and
-    ``synthetic_fixture`` but wrong for ``feature_regression`` over a real
-    cache: the regression itself is new inference. This test is expected to
-    fail until the adapter distinguishes the modes; the failure is the
-    signal that the provenance contract is not yet implemented.
+    Contract: ``feature_regression_performed`` is True iff execution_mode is
+    ``feature_regression``. ``new_visual_inference_performed`` is always False
+    in the current implementation because the regression head consumes cached
+    CLIP features and never invokes a visual encoder on new images.
     """
     candidate = read_json(run_estimation(real_request, tmp_path / "out"))
-    assert candidate["method"]["new_visual_inference_performed"] is True, (
-        "feature_regression over a real cache must set "
-        "new_visual_inference_performed=True; the adapter currently "
-        "hard-codes False for every mode (see src/simready/ingestion/"
-        "nerf2physics.py), which mislabels fresh inference as a replay"
+    method = candidate["method"]
+    assert method["execution_mode"] == "feature_regression"
+    assert method["feature_regression_performed"] is True, (
+        "feature_regression mode must declare feature_regression_performed=True"
     )
+    assert method["new_visual_inference_performed"] is False, (
+        "feature_regression replays cached CLIP features; it must NOT claim "
+        "new_visual_inference_performed=True (no image encoder is run)"
+    )
+    assert "visual_inference_note" in method
+    assert "cached feature replay" in method["visual_inference_note"]
 
 
 def test_predictions_are_physically_plausible(real_assets, real_request, tmp_path):
