@@ -158,12 +158,16 @@ class PositionAttitudeController:
     def attitude_torque(
         self, rot: np.ndarray, rot_d: np.ndarray, angular_velocity_body: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:
-        """PD attitude torque toward rot_d; returns (torque, attitude_error).
+        """PD attitude torque toward rot_d; returns (body torque, body error).
 
-        Sign verified by unit test: for Rd=Ry(+theta) from identity this must
-        yield +y torque (omega=+y tilts body z toward +x, matching Rd).
+        The vee of (RdR^T - RRd^T) is a WORLD-frame error; both the error and
+        the damping must share one frame, so the error is rotated into the
+        body frame before pairing with body angular velocity. Mixing frames
+        was stable near yaw=0 but diverged once large yaw met large tilt
+        (first record run, cross-yard corner).
         """
-        e_rot = self.attitude_error_vee(rot_d @ rot.T - rot @ rot_d.T)
+        e_rot_world = self.attitude_error_vee(rot_d @ rot.T - rot @ rot_d.T)
+        e_rot = rot.T @ e_rot_world
         return self.kp_att * e_rot - self.kd_att * angular_velocity_body, e_rot
 
     def mixer(

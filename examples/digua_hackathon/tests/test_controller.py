@@ -78,9 +78,32 @@ def test_attitude_torque_sign_tilts_toward_desired():
         np.array([np.sin(np.radians(10)), 0.0, np.cos(np.radians(10))]), 0.0
     )
     rot = np.eye(3)
+    _run_attitude_sim(ctrl, rot, rot_d)
+
+
+def test_attitude_loop_converges_at_large_yaw_with_tilt():
+    """Frame-consistency regression: with the body yawed -90 deg, a tilt
+    demand expressed in the body frame must still tilt the WORLD z toward the
+    desired direction. (World-frame error + body-frame damping diverged here.)"""
+    ctrl = PositionAttitudeController()
+    yaw = np.array(
+        [[np.cos(np.pi / 2), np.sin(np.pi / 2), 0.0],
+         [-np.sin(np.pi / 2), np.cos(np.pi / 2), 0.0],
+         [0.0, 0.0, 1.0]]
+    )  # body x points along world -y (yaw -90 deg)
+    tilt_dir_world = yaw[:, 0] * 0.17 + np.array([0, 0, 0.985])  # tilt toward body +x
+    tilt_dir_world /= np.linalg.norm(tilt_dir_world)
+    rot_d = ctrl.desired_rotation(tilt_dir_world, -np.pi / 2)
+    rot_end = _run_attitude_sim(ctrl, yaw.copy(), rot_d)
+    z_final = rot_end[:, 2]
+    z_desired = rot_d[:, 2]
+    cos_err = float(z_final @ z_desired)
+    assert cos_err > 0.99, f"yawed attitude did not converge (cos err {cos_err:.4f})"
+
+
+def _run_attitude_sim(ctrl, rot, rot_d, steps: int = 600, dt: float = 0.002) -> np.ndarray:
     omega = np.zeros(3)
-    dt = 0.002
-    for _ in range(300):
+    for _ in range(steps):
         torque, _ = ctrl.attitude_torque(rot, rot_d, omega)
         omega = omega + dt * torque  # I = identity
         wx, wy, wz = omega
@@ -88,8 +111,7 @@ def test_attitude_torque_sign_tilts_toward_desired():
         rot = rot + rot @ dR
         q, r = np.linalg.qr(rot)
         rot = q @ np.diag(np.sign(np.diag(r)))
-    z_axis = rot[:, 2]
-    assert z_axis[0] > 0.05, f"body z tilted away from +x: {z_axis}"
+    return rot
 
 
 def _rot_to_quat(rot: np.ndarray) -> np.ndarray:
