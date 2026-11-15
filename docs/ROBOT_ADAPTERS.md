@@ -83,6 +83,57 @@ repository is MIT, so any future code reuse requires a separate license review.
 Its MuJoCo-specific simulator wrapper also does not directly provide an Isaac
 Sim adapter.
 
+## Astra / Code-as-Policy control loop
+
+The NVIDIA Astranomy study describes its agentic setup as a persistent Codex
+session: Astra receives camera frames and current robot state, proposes a
+bounded end-effector target, the host validates and executes it, then returns
+a fresh observation. The agent keeps prior decisions and feedback in context.
+Optional Python/image tools can inspect saved observations. This is a
+closed-loop agent harness; it is not a hard real-time joint servo. Their report
+measures inference calls in seconds, so a local low-level controller must own
+the fast control loop.
+
+For this repository the intended mapping is:
+
+```text
+camera RGB + normalized joint state + task/history
+                     ↓
+             Astra proposes one target
+                     ↓
+     strict action schema + freshness/limit checks
+                     ↓
+       Isaac adapter or ROS 2 adapter executes
+                     ↓
+      measured state + new camera frames + errors
+                     └──────── back to Astra
+```
+
+The first Isaac implementation is `IsaacSimArticulationAdapter`. It maps named
+profile joints into Isaac's articulation indices, applies one position target
+for one physics step, and returns measured joint positions/velocities. The
+host owns the `SimulationApp`, world, and camera sensors. Each agent action
+must be followed by a new observation; a model's `done` response is never a
+task-success signal. The host needs a separate task verifier.
+
+## Isaac server pilot
+
+Run `examples/robot_adapters/isaac_rebot_agent_loop.py` on the GPU server after
+placing the official RS USD asset at the documented path. It publishes a
+small JSON observation (joint state, action feedback and image path) and waits
+for a one-group joint target in `command.json`. Upload to a temporary filename
+and rename it atomically so the running worker never reads a partial JSON file.
+The agent reads the image and state, writes a bounded target, then receives the
+next state/image and measured action feedback. The server pilot verified this
+loop on the L40/Isaac Sim 6.2 with two small joint1 moves; the measured target
+error was below 0.002 rad. It stores RGB observations, JSON state, and the exact
+command/event trace, not a video. This file handoff is intended for the first
+Astra-in-the-loop canary; replace it with a scoped tool service for concurrent
+users. The current canary demonstrates the Code-as-Policy control boundary, but
+does not launch an Astra model/API session itself or solve a task autonomously.
+It operates only the Isaac model and never connects to CAN, a vendor SDK, or
+real hardware.
+
 ## Environment composition
 
 The next integration step is a workflow/environment factory that receives a
