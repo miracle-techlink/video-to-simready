@@ -1,0 +1,593 @@
+{
+  "schema_version": 1,
+  "frozen_at": "2026-11-15T06:58:33.941688+00:00",
+  "protocol": "examples/acceptance/real_segmentation/PROTOCOL.md @ a5b80dd",
+  "annotation_file": {
+    "name": "annotations/instances_val2017.json",
+    "sha256": "e8c7f7908f1d7278341fae127d0da654f102f11bd7b21d8aeefa635b8c810b6f",
+    "source_url": "http://images.cocodataset.org/annotations/annotations_trainval2017.zip",
+    "etag": "f4bbac642086de4f52a3fdda2de5fa2c"
+  },
+  "selection_rule": "ascending image_id, first 5 images with >=3 non-crowd vocab annotations of area>=1000px (frozen in PROTOCOL.md)",
+  "images": [
+    {
+      "image_id": 139,
+      "file_name": "000000000139.jpg",
+      "path": "/home/nvidia/algotithm/.simready-collaboration/parallel-followup-20261115/simready-data-validation/artifacts/dataset/images/000000000139.jpg",
+      "sha256": "ffe0f0cec3b2e27aab1967229cdf0a0d7751dcdd5800322f0b8ac0dffb3b8a8d",
+      "official_url": "http://images.cocodataset.org/val2017/000000000139.jpg",
+      "coco_url": "http://images.cocodataset.org/val2017/000000000139.jpg",
+      "flickr_url": "http://farm9.staticflickr.com/8035/8024364858_9c41dc1666_z.jpg",
+      "width": 640,
+      "height": 426,
+      "license_id": 2,
+      "license_name": "Attribution-NonCommercial License",
+      "license_url": "http://creativecommons.org/licenses/by-nc/2.0/",
+      "fetch_status": "downloaded",
+      "gt_crowd_excluded": 0,
+      "gt_below_pipeline_floor": 2,
+      "gt_matched_count": 4
+    },
+    {
+      "image_id": 1993,
+      "file_name": "000000001993.jpg",
+      "path": "/home/nvidia/algotithm/.simready-collaboration/parallel-followup-20261115/simready-data-validation/artifacts/dataset/images/000000001993.jpg",
+      "sha256": "039f3bfb862023bde7f835a36c32d8f59a3e66488863c2a47b7b746e78c44186",
+      "official_url": "http://images.cocodataset.org/val2017/000000001993.jpg",
+      "coco_url": "http://images.cocodataset.org/val2017/000000001993.jpg",
+      "flickr_url": "http://farm4.staticflickr.com/3413/3223600591_25cb6f12c6_z.jpg",
+      "width": 640,
+      "height": 419,
+      "license_id": 4,
+      "license_name": "Attribution License",
+      "license_url": "http://creativecommons.org/licenses/by/2.0/",
+      "fetch_status": "downloaded",
+      "gt_crowd_excluded": 0,
+      "gt_below_pipeline_floor": 0,
+      "gt_matched_count": 4
+    },
+    {
+      "image_id": 10092,
+      "file_name": "000000010092.jpg",
+      "path": "/home/nvidia/algotithm/.simready-collaboration/parallel-followup-20261115/simready-data-validation/artifacts/dataset/images/000000010092.jpg",
+      "sha256": "70eae5520682d2ad23ff01df57fc4f29cb3f5d4c1d63753d3b7f120f6a0d939b",
+      "official_url": "http://images.cocodataset.org/val2017/000000010092.jpg",
+      "coco_url": "http://images.cocodataset.org/val2017/000000010092.jpg",
+      "flickr_url": "http://farm9.staticflickr.com/8276/8710590452_08a7a8f59c_z.jpg",
+      "width": 640,
+      "height": 426,
+      "license_id": 5,
+      "license_name": "Attribution-ShareAlike License",
+      "license_url": "http://creativecommons.org/licenses/by-sa/2.0/",
+      "fetch_status": "downloaded",
+      "gt_crowd_excluded": 0,
+      "gt_below_pipeline_floor": 0,
+      "gt_matched_count": 4
+    },
+    {
+      "image_id": 10707,
+      "file_name": "000000010707.jpg",
+      "path": "/home/nvidia/algotithm/.simready-collaboration/parallel-followup-20261115/simready-data-validation/artifacts/dataset/images/000000010707.jpg",
+      "sha256": "a361abb7579193709ef3debbec6298bf0c540bece429c4aadb19be82e04ab6a0",
+      "official_url": "http://images.cocodataset.org/val2017/000000010707.jpg",
+      "coco_url": "http://images.cocodataset.org/val2017/000000010707.jpg",
+      "flickr_url": "http://farm1.staticflickr.com/147/434840964_a9c5bc3b58_z.jpg",
+      "width": 640,
+      "height": 480,
+      "license_id": 5,
+      "license_name": "Attribution-ShareAlike License",
+      "license_url": "http://creativecommons.org/licenses/by-sa/2.0/",
+      "fetch_status": "downloaded",
+      "gt_crowd_excluded": 0,
+      "gt_below_pipeline_floor": 0,
+      "gt_matched_count": 3
+    },
+    {
+      "image_id": 13659,
+      "file_name": "000000013659.jpg",
+      "path": "/home/nvidia/algotithm/.simready-collaboration/parallel-followup-20261115/simready-data-validation/artifacts/dataset/images/000000013659.jpg",
+      "sha256": "b357d19dee467587a8788ac4e5b45677f4fde1b62726c690795e188ae75d822b",
+      "official_url": "http://images.cocodataset.org/val2017/000000013659.jpg",
+      "coco_url": "http://images.cocodataset.org/val2017/000000013659.jpg",
+      "flickr_url": "http://farm7.staticflickr.com/6144/5987177856_785814a990_z.jpg",
+      "width": 640,
+      "height": 480,
+      "license_id": 4,
+      "license_name": "Attribution License",
+      "license_url": "http://creativecommons.org/licenses/by/2.0/",
+      "fetch_status": "downloaded",
+      "gt_crowd_excluded": 0,
+      "gt_below_pipeline_floor": 0,
+      "gt_matched_count": 9
+    }
+  ],
+  "gt": [
+    {
+      "ann_id": 103487,
+      "image_id": 139,
+      "coco_category": "chair",
+      "category": "chair",
+      "coco_area_px": 2245.34355,
+      "bbox_xywh": [
+        358.98,
+        218.05,
+        56.0,
+        102.83
+      ],
+      "gt_provenance": "human_coco_val2017_official",
+      "status": "ok",
+      "conversion": "polygon_rasterized",
+      "mask_path": "/home/nvidia/algotithm/.simready-collaboration/parallel-followup-20261115/simready-data-validation/artifacts/dataset/gt/139_103487.png",
+      "mask_sha256": "19a7fa90451085c6e7cbebeec286ca48e64c0258662b2f5c801a52e1f787df06",
+      "mask_px": 2244
+    },
+    {
+      "ann_id": 104368,
+      "image_id": 139,
+      "coco_category": "chair",
+      "category": "chair",
+      "coco_area_px": 1833.7840000000017,
+      "bbox_xywh": [
+        290.69,
+        218.0,
+        61.83,
+        98.48
+      ],
+      "gt_provenance": "human_coco_val2017_official",
+      "status": "ok",
+      "conversion": "polygon_rasterized",
+      "mask_path": "/home/nvidia/algotithm/.simready-collaboration/parallel-followup-20261115/simready-data-validation/artifacts/dataset/gt/139_104368.png",
+      "mask_sha256": "5eedff5e196bd8a7f8392ceeaed603f9c95230627bdd448db0956042af7b1d38",
+      "mask_px": 1841
+    },
+    {
+      "ann_id": 105328,
+      "image_id": 139,
+      "coco_category": "chair",
+      "category": "chair",
+      "coco_area_px": 1289.3734500000014,
+      "bbox_xywh": [
+        413.2,
+        223.01,
+        30.17,
+        81.36
+      ],
+      "gt_provenance": "human_coco_val2017_official",
+      "status": "ok",
+      "conversion": "polygon_rasterized",
+      "mask_path": "/home/nvidia/algotithm/.simready-collaboration/parallel-followup-20261115/simready-data-validation/artifacts/dataset/gt/139_105328.png",
+      "mask_sha256": "af1d68eb85948fad504252e4f629c1dda976b5b865da193f11824bab6599c146",
+      "mask_px": 1291
+    },
+    {
+      "ann_id": 110334,
+      "image_id": 139,
+      "coco_category": "chair",
+      "category": "chair",
+      "coco_area_px": 210.14820000000023,
+      "bbox_xywh": [
+        317.4,
+        219.24,
+        21.58,
+        11.59
+      ],
+      "gt_provenance": "human_coco_val2017_official",
+      "status": "below_pipeline_floor"
+    },
+    {
+      "ann_id": 1941808,
+      "image_id": 139,
+      "coco_category": "chair",
+      "category": "chair",
+      "coco_area_px": 90.98724999999988,
+      "bbox_xywh": [
+        412.25,
+        219.02,
+        9.63,
+        12.52
+      ],
+      "gt_provenance": "human_coco_val2017_official",
+      "status": "below_pipeline_floor"
+    },
+    {
+      "ann_id": 2204286,
+      "image_id": 139,
+      "coco_category": "dining table",
+      "category": "dining_table",
+      "coco_area_px": 2362.4897499999984,
+      "bbox_xywh": [
+        321.21,
+        231.22,
+        125.56,
+        88.93
+      ],
+      "gt_provenance": "human_coco_val2017_official",
+      "status": "ok",
+      "conversion": "polygon_rasterized",
+      "mask_path": "/home/nvidia/algotithm/.simready-collaboration/parallel-followup-20261115/simready-data-validation/artifacts/dataset/gt/139_2204286.png",
+      "mask_sha256": "f7793f1d954db9e6740b9140a034206f9cfd07644b35674c836cbcc3148e9ec1",
+      "mask_px": 2365
+    },
+    {
+      "ann_id": 315959,
+      "image_id": 1993,
+      "coco_category": "bed",
+      "category": "bed",
+      "coco_area_px": 45500.92095,
+      "bbox_xywh": [
+        258.93,
+        194.91,
+        355.92,
+        219.38
+      ],
+      "gt_provenance": "human_coco_val2017_official",
+      "status": "ok",
+      "conversion": "polygon_rasterized",
+      "mask_path": "/home/nvidia/algotithm/.simready-collaboration/parallel-followup-20261115/simready-data-validation/artifacts/dataset/gt/1993_315959.png",
+      "mask_sha256": "2a78a286c177d9f284dacd4cc35aa6bc4801371c781dd1d7861f9641a89a9724",
+      "mask_px": 45496
+    },
+    {
+      "ann_id": 376624,
+      "image_id": 1993,
+      "coco_category": "chair",
+      "category": "chair",
+      "coco_area_px": 9951.374899999997,
+      "bbox_xywh": [
+        109.22,
+        250.46,
+        118.64,
+        158.18
+      ],
+      "gt_provenance": "human_coco_val2017_official",
+      "status": "ok",
+      "conversion": "polygon_rasterized",
+      "mask_path": "/home/nvidia/algotithm/.simready-collaboration/parallel-followup-20261115/simready-data-validation/artifacts/dataset/gt/1993_376624.png",
+      "mask_sha256": "7e225079db70ae580ff2ee4eec684ff00836bdc8aac12a0897c4c527c4cc7722",
+      "mask_px": 9950
+    },
+    {
+      "ann_id": 1579220,
+      "image_id": 1993,
+      "coco_category": "chair",
+      "category": "chair",
+      "coco_area_px": 2282.7901500000007,
+      "bbox_xywh": [
+        0.0,
+        298.68,
+        35.15,
+        109.32
+      ],
+      "gt_provenance": "human_coco_val2017_official",
+      "status": "ok",
+      "conversion": "polygon_rasterized",
+      "mask_path": "/home/nvidia/algotithm/.simready-collaboration/parallel-followup-20261115/simready-data-validation/artifacts/dataset/gt/1993_1579220.png",
+      "mask_sha256": "4d63f926e55b8cf27ab9280c7aaf6755a17ecf9c56f062f6aa4518257a72cb06",
+      "mask_px": 2284
+    },
+    {
+      "ann_id": 1619122,
+      "image_id": 1993,
+      "coco_category": "dining table",
+      "category": "dining_table",
+      "coco_area_px": 10218.313650000006,
+      "bbox_xywh": [
+        0.04,
+        251.11,
+        154.39,
+        167.89
+      ],
+      "gt_provenance": "human_coco_val2017_official",
+      "status": "ok",
+      "conversion": "polygon_rasterized",
+      "mask_path": "/home/nvidia/algotithm/.simready-collaboration/parallel-followup-20261115/simready-data-validation/artifacts/dataset/gt/1993_1619122.png",
+      "mask_sha256": "8e95846bd66be93bc962d4a5c022246ec16f33ce4d6102d71c206b370977b8f6",
+      "mask_px": 10221
+    },
+    {
+      "ann_id": 315160,
+      "image_id": 10092,
+      "coco_category": "bed",
+      "category": "bed",
+      "coco_area_px": 55302.32280000001,
+      "bbox_xywh": [
+        93.61,
+        187.21,
+        345.76,
+        189.12
+      ],
+      "gt_provenance": "human_coco_val2017_official",
+      "status": "ok",
+      "conversion": "polygon_rasterized",
+      "mask_path": "/home/nvidia/algotithm/.simready-collaboration/parallel-followup-20261115/simready-data-validation/artifacts/dataset/gt/10092_315160.png",
+      "mask_sha256": "d67f1c54c6229552c9896c164ca84e0183492a2f38c93c406e0ef7ba53892d5c",
+      "mask_px": 55304
+    },
+    {
+      "ann_id": 1598158,
+      "image_id": 10092,
+      "coco_category": "chair",
+      "category": "chair",
+      "coco_area_px": 1806.1752000000004,
+      "bbox_xywh": [
+        579.62,
+        389.47,
+        60.1,
+        36.53
+      ],
+      "gt_provenance": "human_coco_val2017_official",
+      "status": "ok",
+      "conversion": "polygon_rasterized",
+      "mask_path": "/home/nvidia/algotithm/.simready-collaboration/parallel-followup-20261115/simready-data-validation/artifacts/dataset/gt/10092_1598158.png",
+      "mask_sha256": "adf6472a00289db0b05d4f47eb85c0e063f4e0b5b8ac39e7197e36f37eb00eaf",
+      "mask_px": 1813
+    },
+    {
+      "ann_id": 1613191,
+      "image_id": 10092,
+      "coco_category": "dining table",
+      "category": "dining_table",
+      "coco_area_px": 8324.60595,
+      "bbox_xywh": [
+        546.22,
+        263.69,
+        93.57,
+        161.57
+      ],
+      "gt_provenance": "human_coco_val2017_official",
+      "status": "ok",
+      "conversion": "polygon_rasterized",
+      "mask_path": "/home/nvidia/algotithm/.simready-collaboration/parallel-followup-20261115/simready-data-validation/artifacts/dataset/gt/10092_1613191.png",
+      "mask_sha256": "8cfbc93f8f788dc4d234ad1b90f422274ef5e80b65bdd9406d982fa241a18668",
+      "mask_px": 8337
+    },
+    {
+      "ann_id": 1938423,
+      "image_id": 10092,
+      "coco_category": "chair",
+      "category": "chair",
+      "coco_area_px": 3310.2827499999967,
+      "bbox_xywh": [
+        538.19,
+        204.74,
+        101.81,
+        202.02
+      ],
+      "gt_provenance": "human_coco_val2017_official",
+      "status": "ok",
+      "conversion": "polygon_rasterized",
+      "mask_path": "/home/nvidia/algotithm/.simready-collaboration/parallel-followup-20261115/simready-data-validation/artifacts/dataset/gt/10092_1938423.png",
+      "mask_sha256": "b64adbb5b04eaac00fafe6d5b284523a5359ac30c58ab32dc11e31d8d4039d32",
+      "mask_px": 3323
+    },
+    {
+      "ann_id": 113866,
+      "image_id": 10707,
+      "coco_category": "couch",
+      "category": "couch",
+      "coco_area_px": 18650.655,
+      "bbox_xywh": [
+        532.58,
+        247.92,
+        107.42,
+        232.08
+      ],
+      "gt_provenance": "human_coco_val2017_official",
+      "status": "ok",
+      "conversion": "polygon_rasterized",
+      "mask_path": "/home/nvidia/algotithm/.simready-collaboration/parallel-followup-20261115/simready-data-validation/artifacts/dataset/gt/10707_113866.png",
+      "mask_sha256": "6ca13ce1ad9961f859d1775c26340c63c8896d59e333800ee8441b45ae22fa3c",
+      "mask_px": 18656
+    },
+    {
+      "ann_id": 116290,
+      "image_id": 10707,
+      "coco_category": "couch",
+      "category": "couch",
+      "coco_area_px": 18782.9575,
+      "bbox_xywh": [
+        0.0,
+        201.56,
+        236.4,
+        226.12
+      ],
+      "gt_provenance": "human_coco_val2017_official",
+      "status": "ok",
+      "conversion": "polygon_rasterized",
+      "mask_path": "/home/nvidia/algotithm/.simready-collaboration/parallel-followup-20261115/simready-data-validation/artifacts/dataset/gt/10707_116290.png",
+      "mask_sha256": "c5c5566ebbc930d8f54e7eabe16f4b3283be6086b3eb04f5bba1fec571f63b2f",
+      "mask_px": 18807
+    },
+    {
+      "ann_id": 120550,
+      "image_id": 10707,
+      "coco_category": "dining table",
+      "category": "dining_table",
+      "coco_area_px": 16145.946999999996,
+      "bbox_xywh": [
+        100.52,
+        351.32,
+        207.81,
+        123.11
+      ],
+      "gt_provenance": "human_coco_val2017_official",
+      "status": "ok",
+      "conversion": "polygon_rasterized",
+      "mask_path": "/home/nvidia/algotithm/.simready-collaboration/parallel-followup-20261115/simready-data-validation/artifacts/dataset/gt/10707_120550.png",
+      "mask_sha256": "6bd29dcec82241294db9ded4142c415ca3e75b437b7eb6db3d8c4f0df787e021",
+      "mask_px": 16113
+    },
+    {
+      "ann_id": 103597,
+      "image_id": 13659,
+      "coco_category": "chair",
+      "category": "chair",
+      "coco_area_px": 10332.542850000002,
+      "bbox_xywh": [
+        364.64,
+        290.06,
+        123.6,
+        166.87
+      ],
+      "gt_provenance": "human_coco_val2017_official",
+      "status": "ok",
+      "conversion": "polygon_rasterized",
+      "mask_path": "/home/nvidia/algotithm/.simready-collaboration/parallel-followup-20261115/simready-data-validation/artifacts/dataset/gt/13659_103597.png",
+      "mask_sha256": "573f670c340fe9523f9bae0452f0e7ce82dd1cd9a9c0a07ccaa6ddc78dd42674",
+      "mask_px": 10332
+    },
+    {
+      "ann_id": 105100,
+      "image_id": 13659,
+      "coco_category": "chair",
+      "category": "chair",
+      "coco_area_px": 2528.2628999999984,
+      "bbox_xywh": [
+        305.75,
+        145.44,
+        93.0,
+        123.57
+      ],
+      "gt_provenance": "human_coco_val2017_official",
+      "status": "ok",
+      "conversion": "polygon_rasterized",
+      "mask_path": "/home/nvidia/algotithm/.simready-collaboration/parallel-followup-20261115/simready-data-validation/artifacts/dataset/gt/13659_105100.png",
+      "mask_sha256": "da558581be502f48e7ec69998204c100c5d9d38dc7d2dcddd4f356f7850fafc1",
+      "mask_px": 2549
+    },
+    {
+      "ann_id": 105395,
+      "image_id": 13659,
+      "coco_category": "chair",
+      "category": "chair",
+      "coco_area_px": 11571.237649999995,
+      "bbox_xywh": [
+        482.27,
+        173.3,
+        87.39,
+        149.13
+      ],
+      "gt_provenance": "human_coco_val2017_official",
+      "status": "ok",
+      "conversion": "polygon_rasterized",
+      "mask_path": "/home/nvidia/algotithm/.simready-collaboration/parallel-followup-20261115/simready-data-validation/artifacts/dataset/gt/13659_105395.png",
+      "mask_sha256": "3fbba10b241fad1fe5b56037f01341a232b288e5dd5d803b0aa4505a402c1b38",
+      "mask_px": 11573
+    },
+    {
+      "ann_id": 107179,
+      "image_id": 13659,
+      "coco_category": "chair",
+      "category": "chair",
+      "coco_area_px": 3250.8677000000002,
+      "bbox_xywh": [
+        188.62,
+        124.46,
+        89.19,
+        70.21
+      ],
+      "gt_provenance": "human_coco_val2017_official",
+      "status": "ok",
+      "conversion": "polygon_rasterized",
+      "mask_path": "/home/nvidia/algotithm/.simready-collaboration/parallel-followup-20261115/simready-data-validation/artifacts/dataset/gt/13659_107179.png",
+      "mask_sha256": "bfd06f89f4dac6125baa7af8352f9a3c997d05afd696d7d32b8e28605d6bbd2b",
+      "mask_px": 3250
+    },
+    {
+      "ann_id": 110683,
+      "image_id": 13659,
+      "coco_category": "chair",
+      "category": "chair",
+      "coco_area_px": 1518.9017999999994,
+      "bbox_xywh": [
+        377.81,
+        416.0,
+        44.38,
+        57.81
+      ],
+      "gt_provenance": "human_coco_val2017_official",
+      "status": "ok",
+      "conversion": "polygon_rasterized",
+      "mask_path": "/home/nvidia/algotithm/.simready-collaboration/parallel-followup-20261115/simready-data-validation/artifacts/dataset/gt/13659_110683.png",
+      "mask_sha256": "79cd5edde9d2289826ffcd7c471b385ab99e27e7f96e993a68c2036d7a434424",
+      "mask_px": 1523
+    },
+    {
+      "ann_id": 119383,
+      "image_id": 13659,
+      "coco_category": "dining table",
+      "category": "dining_table",
+      "coco_area_px": 12086.843950000002,
+      "bbox_xywh": [
+        384.06,
+        144.64,
+        189.57,
+        137.72
+      ],
+      "gt_provenance": "human_coco_val2017_official",
+      "status": "ok",
+      "conversion": "polygon_rasterized",
+      "mask_path": "/home/nvidia/algotithm/.simready-collaboration/parallel-followup-20261115/simready-data-validation/artifacts/dataset/gt/13659_119383.png",
+      "mask_sha256": "1c68f36cfb325c8c44d3608eb9c501ce3d82dc19a4c2f9b66fea199e7b2972e4",
+      "mask_px": 12092
+    },
+    {
+      "ann_id": 123229,
+      "image_id": 13659,
+      "coco_category": "dining table",
+      "category": "dining_table",
+      "coco_area_px": 1523.5983999999999,
+      "bbox_xywh": [
+        605.36,
+        216.66,
+        34.64,
+        135.53
+      ],
+      "gt_provenance": "human_coco_val2017_official",
+      "status": "ok",
+      "conversion": "polygon_rasterized",
+      "mask_path": "/home/nvidia/algotithm/.simready-collaboration/parallel-followup-20261115/simready-data-validation/artifacts/dataset/gt/13659_123229.png",
+      "mask_sha256": "f43aa584b6e211489ecdfd494e43449c0151acc737544a1def22d25a3ac41585",
+      "mask_px": 1525
+    },
+    {
+      "ann_id": 1934026,
+      "image_id": 13659,
+      "coco_category": "chair",
+      "category": "chair",
+      "coco_area_px": 1981.2406999999996,
+      "bbox_xywh": [
+        282.12,
+        217.81,
+        49.67,
+        92.83
+      ],
+      "gt_provenance": "human_coco_val2017_official",
+      "status": "ok",
+      "conversion": "polygon_rasterized",
+      "mask_path": "/home/nvidia/algotithm/.simready-collaboration/parallel-followup-20261115/simready-data-validation/artifacts/dataset/gt/13659_1934026.png",
+      "mask_sha256": "8220e06ba696323dea617e31e10c45a002a2bbeab096dbe07b84b05c6c6e6a31",
+      "mask_px": 1988
+    },
+    {
+      "ann_id": 1941594,
+      "image_id": 13659,
+      "coco_category": "chair",
+      "category": "chair",
+      "coco_area_px": 1927.1629000000012,
+      "bbox_xywh": [
+        567.44,
+        160.52,
+        43.32,
+        124.23
+      ],
+      "gt_provenance": "human_coco_val2017_official",
+      "status": "ok",
+      "conversion": "polygon_rasterized",
+      "mask_path": "/home/nvidia/algotithm/.simready-collaboration/parallel-followup-20261115/simready-data-validation/artifacts/dataset/gt/13659_1941594.png",
+      "mask_sha256": "200de36bae0b13084cb130569eafae8dfec7ebd9b511a829c8346c7451abfbbd",
+      "mask_px": 1919
+    }
+  ],
+  "gt_total_matched": 24
+}

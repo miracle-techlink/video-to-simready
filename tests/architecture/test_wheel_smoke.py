@@ -73,8 +73,22 @@ def test_wheel_installs_and_imports_outside_checkout(tmp_path):
 
     env_dir = tmp_path / "venv"
     python = _make_venv(env_dir)
+    # --no-index: the wheel declares no hard runtime deps, so installation
+    # must not depend on reaching an index (and mirrors can be down).
+    # --force-reinstall: without it, pip can see the checkout's
+    # src/*.egg-info through an inherited source path, treat the package as
+    # "already installed", skip the wheel and silently leave the venv empty.
     subprocess.run(
-        [str(python), "-m", "pip", "install", "--quiet", str(wheel)],
+        [
+            str(python),
+            "-m",
+            "pip",
+            "install",
+            "--no-index",
+            "--force-reinstall",
+            "--quiet",
+            str(wheel),
+        ],
         check=True,
         capture_output=True,
         text=True,
