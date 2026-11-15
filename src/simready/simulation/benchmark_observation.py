@@ -98,6 +98,7 @@ def run_benchmark_observation(
     worker = [
         "-m",
         "simready.simulation.benchmark_observation",
+        "worker",
         "--plan",
         str(plan_file),
         "--out",
@@ -182,20 +183,22 @@ def _worker_main(argv=None) -> int:
     try:
         import os
 
-        import carb
-        import omni.kit.app
-        import omni.timeline
-        import omni.usd
+        # SimulationApp must exist before any omni.*/carb/pxr import: kit
+        # modules are only importable after the app/experience boots.
         from isaacsim import SimulationApp
-        from PIL import Image
-        from pxr import UsdGeom, UsdLux
 
         app = SimulationApp(
             {"headless": True, "limit_cpu_threads": 4, "fast_shutdown": True},
             experience=os.path.join(os.environ["EXP_PATH"], "isaacsim.exp.base.kit"),
         )
 
+        import carb
+        import omni.kit.app
         import omni.replicator.core as rep
+        import omni.timeline
+        import omni.usd
+        from PIL import Image
+        from pxr import UsdGeom, UsdLux, UsdUtils
 
         omni.kit.app.get_app().get_extension_manager().set_extension_enabled_immediate(
             "omni.replicator.core", True
@@ -208,10 +211,20 @@ def _worker_main(argv=None) -> int:
             "/rtx/post/aa/op": 4,
             "/rtx/post/dlss/execMode": 2,
             "/rtx/dldenoiser/enabled": True,
+            # Match depth_observation gaussian-splat accumulation settings so
+            # splat scenes render identically through both workers.
+            "/rtx/rtpt/gaussian/accumulatedDepth/enabled": True,
+            "/rtx/rtpt/gaussian/accumulatedAlbedo/enabled": True,
+            "/rtx/rtpt/gaussian/maxGaussiansToAccumulate": 48,
         }.items():
             settings.set(key, value)
 
         scene_path = Path(render_request["scene"]["path"])
+        # Fail loudly on unresolved references instead of rendering a scene
+        # with silently missing sublayers/assets.
+        _, _, unresolved = UsdUtils.ComputeAllDependencies(str(scene_path))
+        if unresolved:
+            raise ValueError(f"Scene dependencies unresolved: {list(unresolved)[:8]}")
         if not omni.usd.get_context().open_stage(str(scene_path)):
             raise ValueError("Isaac could not open the source scene")
         omni.timeline.get_timeline_interface().pause()
@@ -354,7 +367,12 @@ def main(argv=None) -> int:
             timeout_s=args.timeout_s,
         )
     elif args.command == "worker":
-        return _worker_main(argv)
+        import sys
+
+        # Strip the leading "worker" subcommand so _worker_main sees only the
+        # worker flags it defines (F-GPU-1: full argv double-parsed the token).
+        full = list(sys.argv[1:] if argv is None else argv)
+        return _worker_main(full[1:])
     else:
         parser.print_help()
         return 1
