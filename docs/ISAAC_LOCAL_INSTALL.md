@@ -80,29 +80,54 @@ exts."isaacsim.asset.browser".folders = [
 ./isaac-sim.sh --/persistent/isaac/asset_root/default="/home/<user>/isaacsim_assets/Assets/Isaac/6.2"
 ```
 
-## 4. 新栈集成
+## 4. 新栈集成（2026-11-15 L40 实测回写）
 
-### 4.1 Steel 求解器（6.x 主推的 GPU 物理后端）
+### 4.1 物理求解器：Newton（Steel 的载体）
 
-- 6.x 的 PhysX 场景可切 **Steel** 后端；GB10 实测 **1.13M env-steps/s**（对比 mjwarp 在同机的慢是环境坑非真实差距）
-- 开启方式：physics scene 的 `physx` schema 里配 steel 后端；机器人批量并行任务收益最大
-- 验证：跑官方 steel benchmark，确认 steps/s 数量级正确再接自己的任务
+**先纠正一个常见误传**：截至 6.2.0-rc.14，安装内**没有独立的 Steel 求解器**（grep 到的 "steel" 全是颜色常量和名为 Steel 的 Material 假阳性）。实际情况：Steel 是 Skild AI 2026-11-09 才开源进 **Newton main** 的求解器，本 rc 内置的是 **Newton 1.6.1**；本镜像无 Steel，如需使用需另行核对上游 Newton 的支持版本线（本次未验证）。
 
-### 4.2 OpenUSD / usd-exchange
+**确切启用键名（实测验证）**：
 
-- 6.x 全面转向 OpenUSD 工作流；本仓库 CPU 编译路径已依赖 `usd-exchange==3.0.1`（Gaussian schema 由该 USD 发行版提供）
-- `deploy/isaac/check_usd.py` 在镜像构建时自动验证 schema 可用
+- USD 侧：物理场景 prim 上的 token 属性 **`newton:solver`**，取值映射 `{mujoco→MjcSceneAPI, xpbd→NewtonXpbdSceneAPI, vbd→NewtonVbdSceneAPI}`，配合 `NewtonSceneAPI`
+- Python 侧：`isaacsim.physics.newton.switch_newton_solver("xpbd", scene_prim)`
+- settings 键：`exts."isaacsim.physics.newton".auto_switch_on_startup` / `.capture_graph_physics_step`
+- PhysX 侧不变：`physxScene:solverType`（TGS/PGS），**没有** steel 键
 
-### 4.3 CuRobo 2.0（运动规划）
+**基准（L40，1000 方块落地同场景，2026-11-15 实测）**：
+
+| 后端 | steps/s | env-steps/s |
+|---|---|---|
+| PhysX（GPU/TGS） | 731.9 | 0.73M |
+| **Newton-XPBD（CUDA graph）** | **5092.5** | **5.09M（≈6.96×）** |
+
+（GB10 历史数据 1.13M env-steps/s 量级一致；批量并行任务收益最大。）
+
+**基准限制（原证据口径，必须随数字一起引用）**：单次运行、单 seed 的吞吐 smoke；未比较 XPBD 与 TGS 的物理保真差异；不可泛化为质量或性能保证。
+
+### 4.2 OpenUSD / usd-exchange（L40 实测）
+
+- **裸 `python.sh` 不带 pxr**；`usd-exchange==3.0.1` wheel 自带完整 pxr 运行时（USD 0.26.8），裸跑 import 即可
+- kit 内 pxr 是 0.25.11，usd-exchange 的 pxr **不会遮挡** kit 内版本
+- ⚠️ **不要把 usd-exchange 装进基础 kit 的 site-packages**（会给共享解释器埋雷）；CPU pxr 工作走隔离 venv
+- 本仓库 `deploy/isaac/check_usd.py` 原样跑通：`gaussian_schema_authoring=PASS`（`UsdVol.ParticleField3DGaussianSplat` 可用）；实测读取编译产物 scene.usda 成功（16 prims）
+
+### 4.3 CuRobo（实测版本真相：没有 2.0）
+
+**上游不存在 CuRobo 2.x**。2026-11-14 的 main（`71ce172`）= tag **v0.9.0 之后 21 个提交**（版本计数勘误见服务器证据目录 `newstack-20261115/errata.json`），包已更名 `nvidia-curobo`，`warp-lang` 成核心依赖，`[isaacsim]` extra 已删除（改用 `[cu12-torch]`）。
 
 ```bash
-omni_python -m pip install tomli wheel ninja
-omni_python -m pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121  # 按 CUDA 版本选
-git clone https://github.com/NVlabs/curobo.git && cd curobo
-omni_python -m pip install -e .[isaacsim] --no-build-isolation
+# 独立 venv（不要污染 Isaac python）
+python3 -m venv venv-curobo && source venv-curobo/bin/activate
+pip install torch==2.9.1 --index-url <镜像>    # curobo main 需 torch>=2.7（dlopen libtorch_cuda_linalg.so）
+git clone https://github.com/NVlabs/curobo.git
+git -C curobo checkout 71ce1726925adfdcc7d0d39dabec5f2d6bb71acd   # 固定到实测提交，避免安装漂移
+pip install -e ./curobo[cu12-torch] --no-build-isolation
+# JIT 需把 venv 的 nvidia lib 目录 + torch/lib 加进 LD_LIBRARY_PATH
 ```
 
-**4.5 时代踩过的坑，2.0 复核状态**：
+**实测冒烟（L40，sm_89）**：官方 Franka pose-to-pose 规划成功（11 waypoints，轨迹 0.23s）；冷跑 117s（warp JIT 编译）/ 热跑 60s。
+
+**4.5 时代踩过的坑，6.x 复核状态**：
 
 | 坑 | 状态 |
 |---|---|
@@ -112,6 +137,8 @@ omni_python -m pip install -e .[isaacsim] --no-build-isolation
 | nvblox_torch `-lglog` 找不到 | 仍需手改 CMakeLists 显式 `GLOG_DIR`（见社区帖） |
 | `DeformableMaterialView` import 错（NVIDIA 自己的 bug） | 4.5 特有；6.x 未见复现，遇到再查 |
 | `nvidia-srl-*` 系列包版本漂移 | 别手动 pip 装，让 isaacsim 自带版本保持 `0.10.0/0.14.0/0.19.1/0.7.2` 这一档 |
+| **交互式 SSH 环境变量让 kit 启动段错误**（async_engine 阶段 `_asyncio` 初始化崩溃） | **新坑（L40 实测 4 次验证）**：用 `env -i` 干净环境包装器启动；同一毒源二号表现是非干净环境下 torch/kit 触发 `_PyErr_SetLocaleString` 符号错（系统 libpython 遮蔽） |
+| pytorch.org 当次下载较慢 | 改用可达镜像源（当次实测显著更快；未记录量化速率） |
 
 ## 5. 安装后验证清单
 
@@ -120,7 +147,7 @@ omni_python -m pip install -e .[isaacsim] --no-build-isolation
 omni_python -m simready.simulation.environment_check
 
 # 2) 渲染冻结检测：交付前必须做首尾帧 diff
-#    （IsaacLab Camera/预制场景文件都可能静默冻结渲染，只有运行时组装才可靠）
+#    （IsaacLab Camera/预制场景文件都可能静默冻结渲染；无论加载预制场景还是运行时组装，都需首尾帧/相机变化验证）
 
 # 3) GPU 回归（本仓库 PR5 验收口径）
 #    - 一次固定两视图捕获 + 像素投影对照
@@ -132,9 +159,11 @@ omni_python -m simready.simulation.environment_check
 
 | 环境 | Isaac | Python | numpy | torch | 渲染 |
 |---|---|---|---|---|---|
-| GPUFree 云端（L40，standalone） | 6.2.0-rc.14 | 3.12.3 | 2.3.1 | 无 | ✅（kit 引导） |
+| GPUFree 云端（L40，standalone） | 6.2.0-rc.14（含 Newton 1.6.1） | 3.12.3 | 2.3.1 | 隔离 venv 2.9.1+cu128 | ✅（kit 引导，需干净环境包装器） |
 | GB10 本机（容器） | 6.1.0 ARM64 | 3.12 | 2.x | 无 | ✅（kitonly 16.6 FPS 实测） |
-| Dockerfile 默认 | 6.2.0 GA | 3.12 | ≥2,<3 | 无 | ✅ |
+| Dockerfile 默认 | 6.2.0 GA tag（**未实测**，rc.14 证据不引作 GA 验收） | 3.12 | ≥2,<3 | 无 | **未验证**（rc.14 渲染证据不顶替 GA） |
+
+**新栈实测版本**（2026-11-15）：Newton 1.6.1 内置（本镜像无 Steel；上游支持版本线未验证）；curobo 实测固定于 `71ce172`（tag v0.9.0 之后 21 个提交；`nvidia-curobo`，无 2.x）；usd-exchange 3.0.1 自带 pxr 0.26.8。
 
 ---
 
