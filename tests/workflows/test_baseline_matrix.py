@@ -848,3 +848,86 @@ class TestRenderAutoBundle:
                 reconstruction,
                 tmp_path / "render-input",
             )
+
+    def test_scene_texture_asset_carried_and_hash_preserved(
+        self, tmp_path, monkeypatch
+    ):
+        """A relative texture asset (non-layer) must travel with the bundle."""
+        pytest.importorskip("pxr")
+        scene_dir = tmp_path / "scene"
+        (scene_dir / "textures").mkdir(parents=True)
+        texture = scene_dir / "textures" / "albedo.png"
+        texture.write_bytes(b"\x89PNG-fake-albedo")
+        scene = scene_dir / "scene.usda"
+        scene.write_text(
+            "#usda 1.0\n"
+            "\n"
+            'def Scope "Root"\n'
+            "{\n"
+            '    def Mesh "M"\n'
+            "    {\n"
+            "        asset inputs:texture = @./textures/albedo.png@\n"
+            "    }\n"
+            "}\n"
+        )
+        ply = tmp_path / "recon.ply"
+        ply.write_text("ply\n")
+        view_set = _bundle_view_set(tmp_path)
+        reconstruction = {"ply_path": str(ply), "ply_sha256": digest(ply)}
+        monkeypatch.setattr(
+            "simready.simulation.benchmark_observation.run_benchmark_observation",
+            _fake_gpu_execution(tmp_path / "render"),
+        )
+        matrix.render_auto_observations(
+            _bundle_contract(scene),
+            view_set,
+            reconstruction,
+            tmp_path / "render-input",
+        )
+        bundle = tmp_path / "render-input"
+        bundled_texture = bundle / "textures" / "albedo.png"
+        assert bundled_texture.is_file()
+        assert digest(bundled_texture) == digest(texture)
+        from pxr import UsdUtils
+
+        _, _, unresolved = UsdUtils.ComputeAllDependencies(str(bundle / "scene.usda"))
+        assert not unresolved
+
+    def test_out_of_tree_reference_rejected_despite_file_existing(
+        self, tmp_path, monkeypatch
+    ):
+        """An absolute/escaping reference must be rejected even though the
+        file still exists at its original location: reachability there never
+        makes the bundle self-contained."""
+        pytest.importorskip("pxr")
+        (tmp_path / "shared").mkdir()
+        (tmp_path / "shared" / "tex.png").write_bytes(b"\x89PNG-shared")
+        scene_dir = tmp_path / "scene"
+        scene_dir.mkdir()
+        scene = scene_dir / "scene.usda"
+        scene.write_text(
+            "#usda 1.0\n"
+            "\n"
+            'def Scope "Root"\n'
+            "{\n"
+            '    def Mesh "M"\n'
+            "    {\n"
+            "        asset inputs:texture = @../shared/tex.png@\n"
+            "    }\n"
+            "}\n"
+        )
+        ply = tmp_path / "recon.ply"
+        ply.write_text("ply\n")
+        view_set = _bundle_view_set(tmp_path)
+        reconstruction = {"ply_path": str(ply), "ply_sha256": digest(ply)}
+        monkeypatch.setattr(
+            "simready.simulation.benchmark_observation.run_benchmark_observation",
+            _fake_gpu_execution(tmp_path / "render"),
+        )
+        with pytest.raises(ValueError, match="outside its own directory"):
+            matrix.render_auto_observations(
+                _bundle_contract(scene),
+                view_set,
+                reconstruction,
+                tmp_path / "render-input",
+            )

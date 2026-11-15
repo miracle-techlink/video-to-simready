@@ -487,36 +487,48 @@ def _copy_bundle_file(source, relative, directory, claimed, label):
 def _scene_local_dependencies(scene_src):
     """List the scene's local USD dependencies relative to its own directory.
 
-    Returns None when pxr is unavailable (the worker's unresolved-layer check
-    still guards rendering in that case). Unresolved references are fatal
-    here so a broken scene never enters a bundle that looks contract-valid.
+    Covers BOTH layers and non-layer assets (textures, PLY meshes, ...) from
+    ComputeAllDependencies. Returns None when pxr is unavailable (the
+    worker's unresolved-layer check still guards rendering in that case).
+    Unresolved references are fatal here so a broken scene never enters a
+    bundle that looks contract-valid. Absolute or out-of-tree references are
+    rejected too: the original file still being reachable at its absolute
+    location must never excuse a bundle that is not actually self-contained;
+    re-freeze the scene with in-tree relative references instead.
     """
     try:
         from pxr import UsdUtils
     except ImportError:
         return None
-    layers, _, unresolved = UsdUtils.ComputeAllDependencies(str(scene_src))
+    layers, assets, unresolved = UsdUtils.ComputeAllDependencies(str(scene_src))
     if unresolved:
         raise ValueError(
             f"Scene dependencies unresolved before bundling: {list(unresolved)[:8]}"
         )
     root = scene_src.parent.resolve()
     dependencies = []
-    for layer in layers:
-        path = Path(layer.realPath)
-        if not path.is_file():
+    seen = set()
+    for entry in (*layers, *assets):
+        raw = getattr(entry, "realPath", None) or str(
+            getattr(entry, "assetPath", entry)
+        )
+        if not raw:
             continue
-        resolved = path.resolve()
-        if resolved == scene_src.resolve():
+        resolved = Path(raw).resolve()
+        if not resolved.is_file() or resolved == scene_src.resolve():
+            continue
+        if resolved in seen:
             continue
         try:
             relative = resolved.relative_to(root)
         except ValueError as error:
             raise ValueError(
-                f"Scene references {resolved} outside its own directory; "
-                "the bundle cannot stay self-contained without editing the "
-                "frozen scene"
+                f"Scene references {resolved} outside its own directory "
+                "(absolute or out-of-tree reference); the bundle cannot stay "
+                "self-contained without editing the frozen scene - re-freeze "
+                "the scene with in-tree relative references"
             ) from error
+        seen.add(resolved)
         dependencies.append((resolved, relative))
     return dependencies
 
@@ -575,10 +587,15 @@ def render_auto_observations(contract, view_set_path, reconstruction, directory)
             claimed,
             "view camera evidence",
         )
-    # USD references must survive the move: copy local dependencies in place
-    # (never rewriting the scene) and re-verify resolution on the copy.
+    # USD references must survive the move: copy local dependencies (layers
+    # AND assets) in place, never rewriting the scene, then re-verify the
+    # bundled copy resolves and carries identical bytes.
     for dep_src, dep_rel in _scene_local_dependencies(scene_src) or ():
-        _copy_bundle_file(dep_src, dep_rel, directory, claimed, "scene dependency")
+        bundled = _copy_bundle_file(
+            dep_src, dep_rel, directory, claimed, "scene dependency"
+        )
+        if digest(bundled) != digest(dep_src):
+            raise ValueError(f"Scene dependency copy differs: {dep_rel}")
     _verify_bundle_scene_resolves(directory / scene_src.name)
     request = {
         "schema_version": 1,
