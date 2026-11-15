@@ -160,6 +160,14 @@ jobs:
           assert result['task_validated'] is False, result
           assert all(stage['reused'] for stage in result['stages']), result
           PY
+      - name: Wheel smoke test against built wheel
+        env:
+          SIMREADY_WHEEL_SMOKE: '1'
+        run: |
+          wheel_files=(dist/*.whl)
+          test "${#wheel_files[@]}" -eq 1
+          export SIMREADY_WHEEL="${{ github.workspace }}/${wheel_files[0]}"
+          python -m pytest tests/architecture/test_wheel_smoke.py -q
       - name: Bind package and smoke evidence to this commit
         env:
           COMMIT_SHA: ${{ github.sha }}
@@ -187,7 +195,7 @@ jobs:
   gate:
     name: merge-gate
     if: ${{ always() }}
-    needs: [static, test, package]
+    needs: [static, test, cpu-contract-tests, package]
     runs-on: ubuntu-24.04
     timeout-minutes: 3
     steps:
