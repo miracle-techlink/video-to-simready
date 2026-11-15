@@ -88,6 +88,8 @@
 | 18 | Isaac Kit 真实渲染 | `tests/simulation/test_isaac_kit_render.py` | 云端 Isaac Sim 容器（用户决策：走云端，不用本机 `isaac-sim:6.1.0`）；固定两视图相机；参考像素 | 云端环境待建 | PR 6d | ☐ |
 | 19 | 端到端真实链路 | `tests/workflows/test_real_pipeline_e2e.py` | 上述全部 + 真实视频/重建产物 | 缺 | PR 6e | ☐ |
 
+> **PR 6b 语义修正（2026-11-15）**：`feature_regression` 模式读缓存的 CLIP 特征做 CPU 回归，**不做新图像编码**。适配器现在分别暴露 `feature_regression_performed`（mode==feature_regression 时 True）和 `new_visual_inference_performed`（当前实现恒 False），并附 `visual_inference_note` 说明。原"故意失败"的 `test_new_visual_inference_flag_is_true` 已替换为对正确语义的断言。
+
 ### 2.1 opt-in 机制
 
 - 统一 pytest marker：`@pytest.mark.real_model` / `@pytest.mark.gpu`

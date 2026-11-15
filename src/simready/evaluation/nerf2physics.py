@@ -15,28 +15,31 @@ from simready.core.types import JsonObject, PathLike
 from simready.core.validation import number, require
 
 # Physical-validation thresholds (evaluation-policy constants, not model behaviour).
-# A scored report "passes" only when every bound holds.
+# A scored report "passes" only when every bound holds. Coverage is judged by
+# ``proposal_range_coverage`` (truth falls inside predicted interval), not by
+# ``prediction_coverage`` (rows scored / scenes declared); the latter is kept
+# as a report field only.
 PHYSICAL_VALIDATION_THRESHOLDS = {
     "ADE_kg_max": 0.5,
     "APE_max": 0.5,
     "MnRE_min": 0.5,
-    "prediction_coverage_min": 0.5,
+    "proposal_range_coverage_min": 0.5,
 }
 
 
-def _physical_validation_passed(metrics: dict, prediction_coverage: float) -> bool:
+def _physical_validation_passed(metrics: dict) -> bool:
     """Threshold semantics for physical_validation_passed.
 
     Returns True only when every metric is present and within its bound.
     """
-    if any(metrics.get(key) is None for key in ("ADE_kg", "APE", "MnRE")):
+    if any(metrics.get(key) is None for key in ("ADE_kg", "APE", "MnRE", "proposal_range_coverage")):
         return False
     t = PHYSICAL_VALIDATION_THRESHOLDS
     return (
         metrics["ADE_kg"] <= t["ADE_kg_max"]
         and metrics["APE"] <= t["APE_max"]
         and metrics["MnRE"] >= t["MnRE_min"]
-        and prediction_coverage >= t["prediction_coverage_min"]
+        and metrics["proposal_range_coverage"] >= t["proposal_range_coverage_min"]
     )
 
 
@@ -124,9 +127,7 @@ def evaluate_mass_predictions(
         "samples": rows,
         "extra_prediction_ids": sorted(set(predictions) - set(scene_ids)),
         "evidence": frozen,
-        "physical_validation_passed": _physical_validation_passed(
-            metrics, prediction_coverage
-        ),
+        "physical_validation_passed": _physical_validation_passed(metrics),
         "limitations": [
             "Metrics use only valid predictions; coverage includes every declared scene.",
             "Proposal ranges are not statistical confidence intervals.",
