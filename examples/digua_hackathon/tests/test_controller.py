@@ -138,3 +138,24 @@ def test_step_returns_finite_commands_near_hover():
     assert np.isfinite(thrusts).all()
     assert abs(cmd["total_thrust_n"] - SPEC.mass_kg * 9.81) < 0.2
     assert not cmd["saturated"]
+
+
+def test_position_error_alone_never_saturates_rotors():
+    """The runaway guard: large position/velocity errors must never drive ALL
+    rotors to maximum (that froze attitude control and diverged in run 1).
+    A single rotor touching 0 during an aggressive combined transient is
+    acceptable real-quad behavior."""
+    ctrl = PositionAttitudeController()
+    for pos, vel, ref_p, ref_v in [
+        (np.array([0, 0, 2.0]), np.zeros(3), np.array([6, 0, 6.0]), np.array([5, 0, 0])),
+        (np.array([0, 0, 2.0]), np.array([0, 0, -4.0]), np.array([0, 0, 6.0]), np.zeros(3)),
+        (np.array([0, 0, 8.0]), np.array([6, -6, 0]), np.array([-2, 2, 2.0]), np.array([-5, 5, 0])),
+    ]:
+        cmd = ctrl.step(pos, vel, np.array([1.0, 0, 0, 0]), np.zeros(3), ref_p, ref_v, 0.0)
+        thrusts = np.asarray(cmd["thrusts_n"])
+        at_max = int((thrusts >= SPEC.rotor_max_thrust_n - 1e-6).sum())
+        assert at_max < 3, (
+            f"{at_max}/4 rotors at max on err {np.linalg.norm(ref_p - pos):.1f} m; "
+            "attitude authority frozen"
+        )
+        assert cmd["total_thrust_n"] < 4 * SPEC.rotor_max_thrust_n * 0.9

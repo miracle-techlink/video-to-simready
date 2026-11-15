@@ -95,9 +95,10 @@ def _transformer(x: float, y: float) -> list[Box | Cylinder]:
 def _gantry(x: float) -> list[Box | Cylinder]:
     """Steel portal frame spanning y=-10..10 with hanging busbar insulators."""
     prims: list[Box | Cylinder] = []
-    for gy in (-10.0, 10.0):
+    # columns at |y|=11 keep the y=±8.5 patrol lines >2 m clear of them
+    for gy in (-11.0, 11.0):
         prims.append(Box((x, gy, 3.25), (0.5, 0.5, 6.5), STEEL_COLOR, "gantry_column"))
-    prims.append(Box((x, 0.0, 6.6), (0.5, 21.0, 0.5), STEEL_COLOR, "gantry_beam"))
+    prims.append(Box((x, 0.0, 6.6), (0.5, 23.0, 0.5), STEEL_COLOR, "gantry_beam"))
     return prims
 
 
@@ -225,21 +226,20 @@ class Waypoint:
 
 
 # Route facts: yard corridor runs along x; equipment rows sit at x=-14/0/+14.
-# The drone patrols at y=+9 (north of the breaker row, clear of banks whose
-# north edge is y=7.3, south of gantry columns at y=10 minus half-width 0.25)
-# and crosses the yard at the open east end (x=+20) where no gantry exists.
-# Cruise 5 m/s with short holds keeps the run near 30 s of video.
+# The drone patrols at y=±8.5 (clear of banks whose |y| edge is 7.3 and of
+# gantry columns now at |y|=11) and crosses the yard at the open east end
+# (x=+20) where no gantry exists. Cruise 5 m/s, short holds, ~33 s total.
 MISSION_WAYPOINTS: list[Waypoint] = [
-    Waypoint((-24.0, 9.0, 2.0), hold_s=2.5, label="start_hover"),
-    Waypoint((-24.0, 9.0, 4.0), label="climb"),
-    Waypoint((-14.0, 9.0, 4.2), hold_s=1.0, label="inspect_bank_A"),
-    Waypoint((-4.0, 9.0, 4.2), hold_s=1.0, label="inspect_gantry_w"),
-    Waypoint((4.0, 9.0, 4.2), hold_s=1.0, label="inspect_breakers"),
-    Waypoint((14.0, 9.0, 4.2), hold_s=1.0, label="inspect_bank_B"),
-    Waypoint((20.0, 9.0, 7.0), label="climb_overview"),
-    Waypoint((20.0, -9.0, 7.0), label="cross_yard"),
-    Waypoint((0.0, -9.0, 5.0), hold_s=1.5, label="south_pass"),
-    Waypoint((-24.0, -9.0, 3.0), label="exit_west"),
+    Waypoint((-24.0, 8.5, 2.0), hold_s=2.5, label="start_hover"),
+    Waypoint((-24.0, 8.5, 4.0), label="climb"),
+    Waypoint((-14.0, 8.5, 4.2), hold_s=1.0, label="inspect_bank_A"),
+    Waypoint((-4.0, 8.5, 4.2), hold_s=1.0, label="inspect_gantry_w"),
+    Waypoint((4.0, 8.5, 4.2), hold_s=1.0, label="inspect_breakers"),
+    Waypoint((14.0, 8.5, 4.2), hold_s=1.0, label="inspect_bank_B"),
+    Waypoint((20.0, 8.5, 7.0), label="climb_overview"),
+    Waypoint((20.0, -8.5, 7.0), label="cross_yard"),
+    Waypoint((0.0, -8.5, 5.0), hold_s=1.5, label="south_pass"),
+    Waypoint((-24.0, -8.5, 3.0), label="exit_west"),
     Waypoint((-24.0, -4.0, 1.5), hold_s=2.0, label="final_hover"),
 ]
 

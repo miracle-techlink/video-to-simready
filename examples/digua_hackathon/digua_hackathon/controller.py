@@ -96,6 +96,15 @@ class PositionAttitudeController:
 
     # -- main step ---------------------------------------------------------
 
+    # Acceleration authority limits: keep total thrust far below rotor
+    # saturation so attitude control always retains differential-thrust
+    # authority. Saturating all four rotors on a position error freezes
+    # attitude control and diverges (observed in the first record run).
+    MAX_HORIZ_ACCEL_MS2 = 5.0
+    MAX_VERT_ACCEL_MS2 = 4.0
+    YAW_RATE_LIMIT_RADS = 1.6
+    MAX_TORQUE_NM = 3.5  # inside hover differential-thrust authority (~3.8 N*m)
+
     def step(
         self,
         position: np.ndarray,
@@ -111,8 +120,12 @@ class PositionAttitudeController:
             self.kp_pos * (ref_position - position)
             + self.kd_pos * (ref_velocity - velocity)
         )
-        acc[2] += GRAVITY
-        acc[:2] = np.clip(acc[:2], -6.0, 6.0)
+        horiz = acc[:2]
+        speed = float(np.linalg.norm(horiz))
+        if speed > self.MAX_HORIZ_ACCEL_MS2:
+            horiz *= self.MAX_HORIZ_ACCEL_MS2 / speed
+        acc_z = float(np.clip(acc[2], -self.MAX_VERT_ACCEL_MS2, self.MAX_VERT_ACCEL_MS2))
+        acc = np.array([horiz[0], horiz[1], acc_z + GRAVITY])
         thrust_vec = self.spec.mass_kg * acc
         total = float(np.linalg.norm(thrust_vec))
         if total < 1e-3:
@@ -129,6 +142,7 @@ class PositionAttitudeController:
         rot = self.rotation_matrix(quat_wxyz)
         rot_d = self.desired_rotation(z_des, ref_yaw)
         torque, e_rot = self.attitude_torque(rot, rot_d, angular_velocity_body)
+        torque = np.clip(torque, -self.MAX_TORQUE_NM, self.MAX_TORQUE_NM)
 
         thrusts, saturated = self.mixer(total, torque)
         wrench = self.wrench_from_thrusts(thrusts)

@@ -52,7 +52,7 @@ RENDER_FPS = 30
 ENVELOPE_RADIUS = float(np.linalg.norm(np.array(SPEC.envelope)) / 2.0)  # ~0.34 m
 
 MODE_SETTINGS = {
-    "smoke": {"width": 640, "height": 360, "duration_s": 6.0, "rt_subframes": 1,
+    "smoke": {"width": 640, "height": 360, "duration_s": 24.0, "rt_subframes": 1,
               "encode": False},
     "record": {"width": 1280, "height": 720, "duration_s": None, "rt_subframes": 2,
                "encode": True},  # None = mission duration + settle margin
@@ -280,7 +280,10 @@ def _simulate(args: argparse.Namespace, settings: dict, app: object) -> dict[str
             w_body = rot.T @ w_world
             ref_p, ref_v, label = smooth_reference(t)
             if np.linalg.norm(ref_v) > 0.05:
-                last_yaw = float(np.arctan2(ref_v[1], ref_v[0]))
+                desired_yaw = float(np.arctan2(ref_v[1], ref_v[0]))
+                dyaw = (desired_yaw - last_yaw + np.pi) % (2 * np.pi) - np.pi
+                max_dyaw = controller.YAW_RATE_LIMIT_RADS * PHYSICS_DT
+                last_yaw += float(np.clip(dyaw, -max_dyaw, max_dyaw))
             cmd = controller.step(p, v, q, w_body, ref_p, ref_v, last_yaw)
             force_world = rot @ np.array([0.0, 0.0, cmd["total_thrust_n"]])
             torque_world = rot @ np.asarray(cmd["torque_body"], dtype=float)
