@@ -20,7 +20,6 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import pytest
 from PIL import Image
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -117,7 +116,11 @@ class TestCannedCases:
 
     def test_unknown_category_prediction_is_pure_fp(self):
         gt = [gt_row("chair", box_mask(20, 20, 2, 2, 10, 10))]
-        pred = [pred_row("unknown", box_mask(20, 20, 2, 2, 10, 10), raw_label="counter table")]
+        pred = [
+            pred_row(
+                "unknown", box_mask(20, 20, 2, 2, 10, 10), raw_label="counter table"
+            )
+        ]
         res = mod.greedy_match(gt, pred, MASK_IOU, tau=0.5)
         cen = mod.census(gt, pred, res)
         assert (cen["tp"], cen["fp"], cen["fn"]) == (0, 1, 1)
@@ -206,26 +209,69 @@ class TestGroundTruthConversion:
 
 def _mini_coco():
     def img(iid):
-        return {"id": iid, "file_name": f"{iid:012d}.jpg", "width": 64,
-                "height": 48, "license": 4, "coco_url": "", "flickr_url": ""}
+        return {
+            "id": iid,
+            "file_name": f"{iid:012d}.jpg",
+            "width": 64,
+            "height": 48,
+            "license": 4,
+            "coco_url": "",
+            "flickr_url": "",
+        }
 
-    cats = [{"id": 1, "name": "chair"}, {"id": 2, "name": "couch"},
-            {"id": 3, "name": "person"}]
+    cats = [
+        {"id": 1, "name": "chair"},
+        {"id": 2, "name": "couch"},
+        {"id": 3, "name": "person"},
+    ]
     anns = []
     for iid in (11, 22, 33, 44, 55, 66, 77):  # 7 qualifying candidates
         for _ in range(3):
-            anns.append({"id": len(anns), "image_id": iid, "category_id": 1,
-                         "iscrowd": 0, "area": 2000.0, "bbox": [0, 0, 10, 10],
-                         "segmentation": [[1, 1, 30, 1, 30, 20, 1, 20]]})
+            anns.append(
+                {
+                    "id": len(anns),
+                    "image_id": iid,
+                    "category_id": 1,
+                    "iscrowd": 0,
+                    "area": 2000.0,
+                    "bbox": [0, 0, 10, 10],
+                    "segmentation": [[1, 1, 30, 1, 30, 20, 1, 20]],
+                }
+            )
     # decoys: too few instances / too small / crowd / out of vocab
-    anns.append({"id": 99, "image_id": 5, "category_id": 1, "iscrowd": 0,
-                 "area": 2000.0, "bbox": [0, 0, 10, 10],
-                 "segmentation": [[1, 1, 30, 1, 30, 20, 1, 20]]})
-    anns.append({"id": 100, "image_id": 66, "category_id": 2, "iscrowd": 1,
-                 "area": 9000.0, "bbox": [0, 0, 10, 10], "segmentation": {"counts": [4, 4]}})
-    anns.append({"id": 101, "image_id": 22, "category_id": 3, "iscrowd": 0,
-                 "area": 5000.0, "bbox": [0, 0, 10, 10],
-                 "segmentation": [[1, 1, 30, 1, 30, 20, 1, 20]]})
+    anns.append(
+        {
+            "id": 99,
+            "image_id": 5,
+            "category_id": 1,
+            "iscrowd": 0,
+            "area": 2000.0,
+            "bbox": [0, 0, 10, 10],
+            "segmentation": [[1, 1, 30, 1, 30, 20, 1, 20]],
+        }
+    )
+    anns.append(
+        {
+            "id": 100,
+            "image_id": 66,
+            "category_id": 2,
+            "iscrowd": 1,
+            "area": 9000.0,
+            "bbox": [0, 0, 10, 10],
+            "segmentation": {"counts": [4, 4]},
+        }
+    )
+    anns.append(
+        {
+            "id": 101,
+            "image_id": 22,
+            "category_id": 3,
+            "iscrowd": 0,
+            "area": 5000.0,
+            "bbox": [0, 0, 10, 10],
+            "segmentation": [[1, 1, 30, 1, 30, 20, 1, 20]],
+        }
+    )
     return {
         "images": [img(i) for i in (5, 11, 22, 33, 44, 55, 66, 77)],
         "categories": cats,
@@ -247,10 +293,14 @@ class TestSelectionRule:
 
 class TestPRSweep:
     def test_perfect_predictions_ap_one(self):
-        gt = [gt_row("chair", box_mask(20, 20, 0, 0, 8, 8)),
-              gt_row("chair", box_mask(20, 20, 10, 10, 18, 18))]
-        pred = [pred_row("chair", box_mask(20, 20, 0, 0, 8, 8), score=0.9),
-                pred_row("chair", box_mask(20, 20, 10, 10, 18, 18), score=0.8)]
+        gt = [
+            gt_row("chair", box_mask(20, 20, 0, 0, 8, 8)),
+            gt_row("chair", box_mask(20, 20, 10, 10, 18, 18)),
+        ]
+        pred = [
+            pred_row("chair", box_mask(20, 20, 0, 0, 8, 8), score=0.9),
+            pred_row("chair", box_mask(20, 20, 10, 10, 18, 18), score=0.8),
+        ]
         out = mod.ap_sweep(gt, pred, 0.5)
         assert out["all_point_ap"] == 1.0
         assert out["points"][-1]["recall"] == 1.0
@@ -268,8 +318,10 @@ class TestPRSweep:
 
 class TestOverlaySmoke:
     def test_overlay_written_and_classified(self, tmp_path):
-        gt = [gt_row("chair", box_mask(24, 24, 2, 2, 10, 10)),
-              gt_row("bed", box_mask(24, 24, 14, 14, 20, 20))]
+        gt = [
+            gt_row("chair", box_mask(24, 24, 2, 2, 10, 10)),
+            gt_row("bed", box_mask(24, 24, 14, 14, 20, 20)),
+        ]
         pred = [pred_row("chair", box_mask(24, 24, 2, 2, 10, 10))]
         src = tmp_path / "src.png"
         Image.fromarray(np.zeros((24, 24, 3), dtype=np.uint8)).save(src)
@@ -282,8 +334,10 @@ class TestOverlaySmoke:
 class TestF1Formula:
     def test_census_counts_consistent(self):
         gt = [gt_row("chair", box_mask(20, 20, 0, 0, 10, 10)) for _ in range(3)]
-        pred = [pred_row("chair", box_mask(20, 20, 0, 0, 10, 10)),
-                pred_row("chair", box_mask(20, 20, 0, 0, 4, 4))]  # partial dup -> FP
+        pred = [
+            pred_row("chair", box_mask(20, 20, 0, 0, 10, 10)),
+            pred_row("chair", box_mask(20, 20, 0, 0, 4, 4)),
+        ]  # partial dup -> FP
         res = mod.greedy_match(gt, pred, MASK_IOU, tau=0.5)
         cen = mod.census(gt, pred, res)
         assert cen["tp"] == 1 and cen["fp"] == 1 and cen["fn"] == 2

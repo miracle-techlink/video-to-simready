@@ -42,9 +42,10 @@ import time
 import urllib.request
 import zlib
 from collections import defaultdict
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -63,7 +64,12 @@ ANN_SHA256 = "e8c7f7908f1d7278341fae127d0da654f102f11bd7b21d8aeefa635b8c810b6f"
 IMG_URL_FMT = "http://images.cocodataset.org/val2017/{name}"
 
 VOCAB_COCO_NAMES = ("chair", "couch", "bed", "dining table")
-CATEGORY_MAP = {"chair": "chair", "couch": "couch", "bed": "bed", "dining table": "dining_table"}
+CATEGORY_MAP = {
+    "chair": "chair",
+    "couch": "couch",
+    "bed": "bed",
+    "dining table": "dining_table",
+}
 QUERY_CATEGORIES = ("bed", "chair", "couch", "dining_table")
 MIN_VOCAB_INSTANCES = 3
 MIN_GT_AREA_FOR_SELECTION = 1000.0
@@ -121,7 +127,9 @@ class _HttpRangeFile:
         if n == 0 or self._pos >= self.size:
             return b""
         end = min(self._pos + n, self.size) - 1
-        req = urllib.request.Request(self.url, headers={"Range": f"bytes={self._pos}-{end}"})
+        req = urllib.request.Request(
+            self.url, headers={"Range": f"bytes={self._pos}-{end}"}
+        )
         with urllib.request.urlopen(req, timeout=120) as resp:
             data = resp.read()
         if not data:
@@ -135,7 +143,9 @@ def _extract_annotation_member(dest: Path) -> dict[str, Any]:
     """Fetch only instances_val2017.json from the zip via HTTP ranges."""
     if dest.exists() and _sha256(dest) == ANN_SHA256:
         return {"status": "cached", "sha256": ANN_SHA256, "bytes_fetched": 0}
-    with urllib.request.urlopen(urllib.request.Request(ANN_ZIP_URL, method="HEAD"), timeout=60) as r:
+    with urllib.request.urlopen(
+        urllib.request.Request(ANN_ZIP_URL, method="HEAD"), timeout=60
+    ) as r:
         size = int(r["Content-Length"])
         etag = (r.get("ETag") or "").strip('"')
     if etag and etag != ANN_ZIP_ETAG:
@@ -148,15 +158,34 @@ def _extract_annotation_member(dest: Path) -> dict[str, Any]:
     eocd = tail.rfind(b"PK\x05\x06")
     if eocd < 0:
         raise RuntimeError("zip EOCD not found")
-    (_, _, _, _, _, cd_size, cd_off, _) = struct.unpack("<IHHHHIIH", tail[eocd : eocd + 22])
+    (_, _, _, _, _, cd_size, cd_off, _) = struct.unpack(
+        "<IHHHHIIH", tail[eocd : eocd + 22]
+    )
     rf.seek(cd_off)
     cd = rf.read(cd_size)
     pos, member = 0, None
     while pos < len(cd):
         if cd[pos : pos + 4] != b"PK\x01\x02":
             break
-        (_sig, _v, _n, _fl, method, _mt, _md, _crc, csize, usize, nlen, elen,
-         _clen, _disk, _ia, _ea, lho) = struct.unpack("<IHHHHHHIIIHHHHHII", cd[pos : pos + 46])
+        (
+            _sig,
+            _v,
+            _n,
+            _fl,
+            method,
+            _mt,
+            _md,
+            _crc,
+            csize,
+            usize,
+            nlen,
+            elen,
+            _clen,
+            _disk,
+            _ia,
+            _ea,
+            lho,
+        ) = struct.unpack("<IHHHHHHIIIHHHHHII", cd[pos : pos + 46])
         name = cd[pos + 46 : pos + 46 + nlen].decode()
         if name == ANN_MEMBER:
             member = (lho, csize, usize, method)
@@ -231,13 +260,17 @@ def _rle_mask(counts: Any, height: int, width: int) -> np.ndarray | None:
     return flat.reshape((height, width), order="F")
 
 
-def _build_gt_mask(ann: dict[str, Any], height: int, width: int) -> tuple[np.ndarray | None, str]:
+def _build_gt_mask(
+    ann: dict[str, Any], height: int, width: int
+) -> tuple[np.ndarray | None, str]:
     seg = ann.get("segmentation")
     if isinstance(seg, dict):
         if ann.get("iscrowd"):
             return None, "crowd_excluded"
         mask = _rle_mask(seg.get("counts"), height, width)
-        return (mask, "rle_decoded") if mask is not None else (None, "conversion_failed")
+        return (
+            (mask, "rle_decoded") if mask is not None else (None, "conversion_failed")
+        )
     if not seg:
         return None, "conversion_failed"
     return _polygon_mask(seg, height, width), "polygon_rasterized"
@@ -266,7 +299,7 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         "qualified_count": qualified,
         "image_ids": [im["id"] for im in images],
     }
-    licenses = {l["id"]: l for l in coco["licenses"]}
+    licenses = {entry["id"]: entry for entry in coco["licenses"]}
     cats = {c["id"]: c["name"] for c in coco["categories"]}
 
     gt_dir = ds / "gt"
@@ -293,7 +326,9 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         if jpg.exists():
             status = "cached"
         else:
-            with urllib.request.urlopen(IMG_URL_FMT.format(name=name), timeout=120) as r:
+            with urllib.request.urlopen(
+                IMG_URL_FMT.format(name=name), timeout=120
+            ) as r:
                 jpg.write_bytes(r.read())
             status = "downloaded"
         width, height = im["width"], im["height"]
@@ -369,12 +404,23 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     manifest["gt_total_matched"] = sum(1 for r in manifest["gt"] if r["status"] == "ok")
     out_path = ds / "input_manifest.json"
     out_path.write_text(json.dumps(manifest, indent=2))
-    log.update(finished_at=_now(), input_manifest=str(out_path),
-               gt_total_matched=manifest["gt_total_matched"])
+    log.update(
+        finished_at=_now(),
+        input_manifest=str(out_path),
+        gt_total_matched=manifest["gt_total_matched"],
+    )
     (art / "logs").mkdir(parents=True, exist_ok=True)
     (art / "logs" / "fetch.json").write_text(json.dumps(log, indent=2))
-    print(json.dumps({"manifest": str(out_path), "images": len(images),
-                      "gt_matched": manifest["gt_total_matched"]}, indent=2))
+    print(
+        json.dumps(
+            {
+                "manifest": str(out_path),
+                "images": len(images),
+                "gt_matched": manifest["gt_total_matched"],
+            },
+            indent=2,
+        )
+    )
     return 0
 
 
@@ -403,16 +449,25 @@ def cmd_run(args: argparse.Namespace) -> int:
         if out_dir.exists():
             raise RuntimeError(f"run output exists, refusing overwrite: {out_dir}")
         argv = [
-            sys.executable, "-m", "simready.ingestion.segmentation.grounded",
-            "--image", entry["path"],
-            "--output-dir", str(out_dir),
-            "--categories", ",".join(QUERY_CATEGORIES),
-            "--device", "cpu",
-            "--cpu-threads", str(args.cpu_threads),
+            sys.executable,
+            "-m",
+            "simready.ingestion.segmentation.grounded",
+            "--image",
+            entry["path"],
+            "--output-dir",
+            str(out_dir),
+            "--categories",
+            ",".join(QUERY_CATEGORIES),
+            "--device",
+            "cpu",
+            "--cpu-threads",
+            str(args.cpu_threads),
             "--local-files-only",
         ]
         t0 = time.time()
-        proc = subprocess.run(argv, cwd=REPO_ROOT, env=env, capture_output=True, text=True)
+        proc = subprocess.run(
+            argv, cwd=REPO_ROOT, env=env, capture_output=True, text=True
+        )
         wall = time.time() - t0
         log_path = art / "logs" / f"run_{entry['image_id']}.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -421,21 +476,24 @@ def cmd_run(args: argparse.Namespace) -> int:
             f"exit={proc.returncode} wall_s={wall:.1f}\n"
             f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}"
         )
-        runs.append({
-            "image_id": entry["image_id"],
-            "image_sha256": entry["sha256"],
-            "argv": argv,
-            "exit_code": proc.returncode,
-            "wall_s": round(wall, 1),
-            "log": str(log_path),
-        })
+        runs.append(
+            {
+                "image_id": entry["image_id"],
+                "image_sha256": entry["sha256"],
+                "argv": argv,
+                "exit_code": proc.returncode,
+                "wall_s": round(wall, 1),
+                "log": str(log_path),
+            }
+        )
         if proc.returncode != 0:
             raise RuntimeError(
                 f"production entry failed for image {entry['image_id']}; log: {log_path}"
             )
     run_root.mkdir(parents=True, exist_ok=True)
-    (run_root / "run_index.json").write_text(json.dumps(
-        {"generated_at": _now(), "env": env_cfg, "runs": runs}, indent=2))
+    (run_root / "run_index.json").write_text(
+        json.dumps({"generated_at": _now(), "env": env_cfg, "runs": runs}, indent=2)
+    )
     print(json.dumps({"runs": len(runs), "root": str(run_root)}, indent=2))
     return 0
 
@@ -501,8 +559,9 @@ def greedy_match(
     }
 
 
-def census(gt: list[dict[str, Any]], pred: list[dict[str, Any]],
-           result: dict[str, Any]) -> dict[str, Any]:
+def census(
+    gt: list[dict[str, Any]], pred: list[dict[str, Any]], result: dict[str, Any]
+) -> dict[str, Any]:
     """TP/FP/FN counts + PRF1 + matched IoU stats + fault census.
 
     F1 = 2TP/(2TP+FP+FN); precision None when no predictions exist (vacuous,
@@ -520,7 +579,9 @@ def census(gt: list[dict[str, Any]], pred: list[dict[str, Any]],
             "category": pred[i]["category"],
             "raw_label": pred[i].get("raw_label"),
             "score": pred[i].get("score"),
-            "area_px": int(pred[i]["mask"].sum()) if pred[i].get("mask") is not None else None,
+            "area_px": int(pred[i]["mask"].sum())
+            if pred[i].get("mask") is not None
+            else None,
         }
         for i in result["fp"]
     ]
@@ -536,13 +597,15 @@ def census(gt: list[dict[str, Any]], pred: list[dict[str, Any]],
             if v > best:
                 best, best_p = v, pi
         if best >= result["tau"] and best_p is not None:
-            class_errors.append({
-                "gt_category": g["category"],
-                "gt_area_px": g["coco_area_px"],
-                "pred_category": pred[best_p]["category"],
-                "pred_raw_label": pred[best_p].get("raw_label"),
-                "iou": round(best, 4),
-            })
+            class_errors.append(
+                {
+                    "gt_category": g["category"],
+                    "gt_area_px": g["coco_area_px"],
+                    "pred_category": pred[best_p]["category"],
+                    "pred_raw_label": pred[best_p].get("raw_label"),
+                    "iou": round(best, 4),
+                }
+            )
     return {
         "tp": ntp,
         "fp": nfp,
@@ -563,8 +626,9 @@ def census(gt: list[dict[str, Any]], pred: list[dict[str, Any]],
     }
 
 
-def _score_order_status(gt: list[dict[str, Any]], pred: list[dict[str, Any]],
-                        tau: float) -> list[dict[str, Any]]:
+def _score_order_status(
+    gt: list[dict[str, Any]], pred: list[dict[str, Any]], tau: float
+) -> list[dict[str, Any]]:
     """Per-image score-order claiming for the PR sweep (descriptor path).
 
     Predictions rank by (-score, index); each claims its highest-IoU
@@ -592,7 +656,9 @@ def _score_order_status(gt: list[dict[str, Any]], pred: list[dict[str, Any]],
     return rows
 
 
-def ap_sweep(gt: list[dict[str, Any]], pred: list[dict[str, Any]], tau: float) -> dict[str, Any]:
+def ap_sweep(
+    gt: list[dict[str, Any]], pred: list[dict[str, Any]], tau: float
+) -> dict[str, Any]:
     """Score-ranked PR sweep + all-point AP with precision envelope.
 
     gt/pred may pool several images; rows carry image_id when multi-image and
@@ -616,13 +682,14 @@ def ap_sweep(gt: list[dict[str, Any]], pred: list[dict[str, Any]], tau: float) -
     for k in range(1, len(statuses) + 1):
         prefix = statuses[:k]
         ntp = sum(1 for r in prefix if r["is_tp"])
-        nfp = k - ntp
-        points.append({
-            "k": k,
-            "score_cutoff": prefix[-1]["score"],
-            "precision": ntp / k,
-            "recall": ntp / n_gt if n_gt else None,
-        })
+        points.append(
+            {
+                "k": k,
+                "score_cutoff": prefix[-1]["score"],
+                "precision": ntp / k,
+                "recall": ntp / n_gt if n_gt else None,
+            }
+        )
     ap = None
     if points:
         rec = [p["recall"] if p["recall"] is not None else 0.0 for p in points]
@@ -631,7 +698,7 @@ def ap_sweep(gt: list[dict[str, Any]], pred: list[dict[str, Any]], tau: float) -
         for i in range(len(pre) - 2, -1, -1):
             env[i] = max(env[i], env[i + 1])
         ap, prev_r = 0.0, 0.0
-        for r, p in zip(rec, env):
+        for r, p in zip(rec, env, strict=True):
             ap += (r - prev_r) * p
             prev_r = r
     return {
@@ -652,9 +719,13 @@ def _boundary(mask: np.ndarray) -> np.ndarray:
     return m & ~interior
 
 
-def _overlay(image_path: Path, gt: list[dict[str, Any]],
-             pred: list[dict[str, Any]], result: dict[str, Any],
-             out_png: Path) -> None:
+def _overlay(
+    image_path: Path,
+    gt: list[dict[str, Any]],
+    pred: list[dict[str, Any]],
+    result: dict[str, Any],
+    out_png: Path,
+) -> None:
     """GT contours green; TP blue; FP red; FN GT filled yellow. Review aid."""
     base = Image.open(image_path).convert("RGBA")
     layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
@@ -666,7 +737,8 @@ def _overlay(image_path: Path, gt: list[dict[str, Any]],
         alpha = Image.fromarray(mask.astype(np.uint8) * 255)
         nonlocal layer
         layer = Image.alpha_composite(
-            layer, Image.composite(color, Image.new("RGBA", base.size, (0, 0, 0, 0)), alpha)
+            layer,
+            Image.composite(color, Image.new("RGBA", base.size, (0, 0, 0, 0)), alpha),
         )
 
     for gi in result["fn"]:
@@ -680,7 +752,7 @@ def _overlay(image_path: Path, gt: list[dict[str, Any]],
 
     def contour(mask: np.ndarray, color: tuple[int, int, int, int]) -> None:
         ys, xs = np.nonzero(_boundary(mask))
-        for x, y in zip(xs.tolist(), ys.tolist()):
+        for x, y in zip(xs.tolist(), ys.tolist(), strict=True):
             draw.point((x, y), fill=color)
 
     for gi in result["fn"]:
@@ -702,12 +774,18 @@ def _load_gt(manifest: dict[str, Any]) -> dict[int, list[dict[str, Any]]]:
             continue
         path = Path(rec["mask_path"])
         if _sha256(path) != rec["mask_sha256"]:
-            raise RuntimeError(f"GT mask hash mismatch ann={rec['ann_id']} — GT must never change")
-        by_image[rec["image_id"]].append({**rec, "mask": np.asarray(Image.open(path).convert("1"))})
+            raise RuntimeError(
+                f"GT mask hash mismatch ann={rec['ann_id']} — GT must never change"
+            )
+        by_image[rec["image_id"]].append(
+            {**rec, "mask": np.asarray(Image.open(path).convert("1"))}
+        )
     return by_image
 
 
-def _load_predictions(run_dir: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+def _load_predictions(
+    run_dir: Path,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     m = json.loads((run_dir / "manifest.json").read_text())
 
     def rel(entry: dict[str, Any]) -> str:
@@ -729,9 +807,13 @@ def _load_predictions(run_dir: Path) -> tuple[list[dict[str, Any]], list[dict[st
     return derived, raw, m
 
 
-def _evaluate_set(label: str, gt_map: dict[int, list[dict[str, Any]]],
-                  pred_map: dict[int, list[dict[str, Any]]],
-                  image_entries: list[dict[str, Any]], art: Path) -> dict[str, Any]:
+def _evaluate_set(
+    label: str,
+    gt_map: dict[int, list[dict[str, Any]]],
+    pred_map: dict[int, list[dict[str, Any]]],
+    image_entries: list[dict[str, Any]],
+    art: Path,
+) -> dict[str, Any]:
     tau_set = (TAU_PRIMARY, *TAU_SECONDARY)
     per_image: dict[str, dict[str, Any]] = {}
     pooled_gt: list[dict[str, Any]] = []
@@ -745,14 +827,22 @@ def _evaluate_set(label: str, gt_map: dict[int, list[dict[str, Any]]],
         pooled_pred.extend({**p, "image_id": iid} for p in pred)
         per_image[str(iid)] = {}
         for tau in tau_set:
-            res = greedy_match(gt, pred, lambda g, p: mask_iou(g["mask"], p["mask"]), tau=tau)
+            res = greedy_match(
+                gt, pred, lambda g, p: mask_iou(g["mask"], p["mask"]), tau=tau
+            )
             cen = census(gt, pred, res)
             per_image[str(iid)][f"tau_{tau}"] = {
-                "counts": {k: cen[k] for k in ("tp", "fp", "fn", "precision", "recall", "f1")},
-                "matched_iou": cen["matched_iou"] if tau == TAU_PRIMARY else cen["matched_iou"]["values"],
+                "counts": {
+                    k: cen[k] for k in ("tp", "fp", "fn", "precision", "recall", "f1")
+                },
+                "matched_iou": cen["matched_iou"]
+                if tau == TAU_PRIMARY
+                else cen["matched_iou"]["values"],
                 "fn_gt": cen["fn_gt"] if tau == TAU_PRIMARY else None,
                 "fp_pred": cen["fp_pred"] if tau == TAU_PRIMARY else None,
-                "class_error_pairs": cen["class_error_pairs"] if tau == TAU_PRIMARY else None,
+                "class_error_pairs": cen["class_error_pairs"]
+                if tau == TAU_PRIMARY
+                else None,
             }
             micro_counts[f"tau_{tau}"]["tp"] += cen["tp"]
             micro_counts[f"tau_{tau}"]["fp"] += cen["fp"]
@@ -769,7 +859,9 @@ def _evaluate_set(label: str, gt_map: dict[int, list[dict[str, Any]]],
             **c,
             "precision": c["tp"] / (c["tp"] + c["fp"]) if (c["tp"] + c["fp"]) else None,
             "recall": c["tp"] / (c["tp"] + c["fn"]) if (c["tp"] + c["fn"]) else None,
-            "f1": (2 * c["tp"] / (2 * c["tp"] + c["fp"] + c["fn"])) if (2 * c["tp"] + c["fp"] + c["fn"]) else None,
+            "f1": (2 * c["tp"] / (2 * c["tp"] + c["fp"] + c["fn"]))
+            if (2 * c["tp"] + c["fp"] + c["fn"])
+            else None,
         }
     per_class: dict[str, dict[str, Any]] = {}
     ap: dict[str, Any] = {}
@@ -781,18 +873,30 @@ def _evaluate_set(label: str, gt_map: dict[int, list[dict[str, Any]]],
                 iid = entry["image_id"]
                 gt_c = [g for g in gt_map[iid] if g["category"] == cat]
                 pred_c = [p for p in pred_map[iid] if p["category"] == cat]
-                res = greedy_match(gt_c, pred_c, lambda g, p: mask_iou(g["mask"], p["mask"]), tau=tau)
+                res = greedy_match(
+                    gt_c, pred_c, lambda g, p: mask_iou(g["mask"], p["mask"]), tau=tau
+                )
                 cen = census(gt_c, pred_c, res)
                 agg["tp"] += cen["tp"]
                 agg["fp"] += cen["fp"]
                 agg["fn"] += cen["fn"]
                 agg["iou_values"].extend(cen["matched_iou"]["values"])
             per_class[cat][f"tau_{tau}"] = {
-                "tp": agg["tp"], "fp": agg["fp"], "fn": agg["fn"],
-                "precision": agg["tp"] / (agg["tp"] + agg["fp"]) if (agg["tp"] + agg["fp"]) else None,
-                "recall": agg["tp"] / (agg["tp"] + agg["fn"]) if (agg["tp"] + agg["fn"]) else None,
-                "f1": (2 * agg["tp"] / (2 * agg["tp"] + agg["fp"] + agg["fn"])) if (2 * agg["tp"] + agg["fp"] + agg["fn"]) else None,
-                "matched_iou_mean": float(np.mean(agg["iou_values"])) if agg["iou_values"] else None,
+                "tp": agg["tp"],
+                "fp": agg["fp"],
+                "fn": agg["fn"],
+                "precision": agg["tp"] / (agg["tp"] + agg["fp"])
+                if (agg["tp"] + agg["fp"])
+                else None,
+                "recall": agg["tp"] / (agg["tp"] + agg["fn"])
+                if (agg["tp"] + agg["fn"])
+                else None,
+                "f1": (2 * agg["tp"] / (2 * agg["tp"] + agg["fp"] + agg["fn"]))
+                if (2 * agg["tp"] + agg["fp"] + agg["fn"])
+                else None,
+                "matched_iou_mean": float(np.mean(agg["iou_values"]))
+                if agg["iou_values"]
+                else None,
             }
         gt_pool = [g for g in pooled_gt if g["category"] == cat]
         pred_pool = [p for p in pooled_pred if p["category"] == cat]
@@ -804,7 +908,10 @@ def _evaluate_set(label: str, gt_map: dict[int, list[dict[str, Any]]],
         "micro": micro,
         "unknown_category_predictions": {
             "count": len(unknowns),
-            "rows": [{"raw_label": u.get("raw_label"), "score": u.get("score")} for u in unknowns],
+            "rows": [
+                {"raw_label": u.get("raw_label"), "score": u.get("score")}
+                for u in unknowns
+            ],
         },
         "ap_sweep": ap,
         "ap_note": "descriptor only; 24 matched GT instances make AP unstable",
@@ -825,13 +932,27 @@ def _box_level(gt_map, pred_map, image_entries) -> dict[str, Any]:
         iid = entry["image_id"]
         gt = gt_map[iid]
         pred = pred_map[iid]
-        res = greedy_match(gt, pred, lambda g, p: box_iou(gt_box(g), pred_box(p)), tau=BOX_TAU)
+        res = greedy_match(
+            gt, pred, lambda g, p: box_iou(gt_box(g), pred_box(p)), tau=BOX_TAU
+        )
         counts["tp"] += len(res["tp"])
         counts["fp"] += len(res["fp"])
         counts["fn"] += len(res["fn"])
-    counts["precision"] = counts["tp"] / (counts["tp"] + counts["fp"]) if (counts["tp"] + counts["fp"]) else None
-    counts["recall"] = counts["tp"] / (counts["tp"] + counts["fn"]) if (counts["tp"] + counts["fn"]) else None
-    counts["f1"] = (2 * counts["tp"] / (2 * counts["tp"] + counts["fp"] + counts["fn"])) if (2 * counts["tp"] + counts["fp"] + counts["fn"]) else None
+    counts["precision"] = (
+        counts["tp"] / (counts["tp"] + counts["fp"])
+        if (counts["tp"] + counts["fp"])
+        else None
+    )
+    counts["recall"] = (
+        counts["tp"] / (counts["tp"] + counts["fn"])
+        if (counts["tp"] + counts["fn"])
+        else None
+    )
+    counts["f1"] = (
+        (2 * counts["tp"] / (2 * counts["tp"] + counts["fp"] + counts["fn"]))
+        if (2 * counts["tp"] + counts["fp"] + counts["fn"])
+        else None
+    )
     return {"tau_box": BOX_TAU, "micro": counts}
 
 
@@ -864,16 +985,32 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
         },
         "gt_totals": {
             "matched": sum(1 for r in manifest["gt"] if r["status"] == "ok"),
-            "crowd_excluded": sum(1 for r in manifest["gt"] if r["status"] == "crowd_excluded"),
-            "below_pipeline_floor": sum(1 for r in manifest["gt"] if r["status"] == "below_pipeline_floor"),
-            "conversion_failed": sum(1 for r in manifest["gt"] if r["status"] == "conversion_failed"),
+            "crowd_excluded": sum(
+                1 for r in manifest["gt"] if r["status"] == "crowd_excluded"
+            ),
+            "below_pipeline_floor": sum(
+                1 for r in manifest["gt"] if r["status"] == "below_pipeline_floor"
+            ),
+            "conversion_failed": sum(
+                1 for r in manifest["gt"] if r["status"] == "conversion_failed"
+            ),
         },
         "prediction_sets": {
-            "derived_PRIMARY": _evaluate_set("derived", gt_map, derived_map, entries, art),
+            "derived_PRIMARY": _evaluate_set(
+                "derived", gt_map, derived_map, entries, art
+            ),
             "raw_SECONDARY": _evaluate_set("raw", gt_map, raw_map, entries, art),
         },
         "box_level_secondary": _box_level(gt_map, derived_map, entries),
-        "runs": {str(r["image_id"]): {"wall_s": r["wall_s"], "argv": r["argv"], "exit_code": r["exit_code"], "log": r["log"]} for r in run_index["runs"]},
+        "runs": {
+            str(r["image_id"]): {
+                "wall_s": r["wall_s"],
+                "argv": r["argv"],
+                "exit_code": r["exit_code"],
+                "log": r["log"],
+            }
+            for r in run_index["runs"]
+        },
         "production_manifests": prod_manifests,
         "disclaimers": DISCLAIMERS,
         "quality_threshold": "none established; measured values are findings",
@@ -947,7 +1084,12 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("evaluate")
     sub.add_parser("report")
     args = parser.parse_args(argv)
-    return {"fetch": cmd_fetch, "run": cmd_run, "evaluate": cmd_evaluate, "report": cmd_report}[args.cmd](args)
+    return {
+        "fetch": cmd_fetch,
+        "run": cmd_run,
+        "evaluate": cmd_evaluate,
+        "report": cmd_report,
+    }[args.cmd](args)
 
 
 if __name__ == "__main__":
