@@ -44,7 +44,7 @@ from .layout import (
     clearance_to_obstacles,
     mission_duration_s,
     obstacles_for_clearance,
-    reference_trajectory,
+    smooth_reference,
 )
 
 PHYSICS_DT = 1.0 / 240.0
@@ -57,7 +57,7 @@ MODE_SETTINGS = {
     "record": {"width": 1280, "height": 720, "duration_s": None, "rt_subframes": 2,
                "encode": True},  # None = mission duration + settle margin
 }
-RECORD_MAX_S = 34.0
+RECORD_MAX_S = 36.0
 
 
 def now_iso() -> str:
@@ -127,7 +127,7 @@ def run_isaac(args: argparse.Namespace) -> dict[str, object]:
 
     settings = dict(MODE_SETTINGS[args.mode])
     if settings["duration_s"] is None:
-        settings["duration_s"] = min(RECORD_MAX_S, mission_duration_s() + 1.0)
+        settings["duration_s"] = min(RECORD_MAX_S, mission_duration_s() + 2.5)
     app = SimulationApp(
         {"headless": True, "limit_cpu_threads": 4, "fast_shutdown": True},
         experience=os.path.join(os.environ["EXP_PATH"], "isaacsim.exp.base.kit"),
@@ -278,7 +278,7 @@ def _simulate(args: argparse.Namespace, settings: dict, app: object) -> dict[str
         for _ in range(ticks_per_frame):
             p, q, v, w_world, rot = drone_state()
             w_body = rot.T @ w_world
-            ref_p, ref_v, label = reference_trajectory(t)
+            ref_p, ref_v, label = smooth_reference(t)
             if np.linalg.norm(ref_v) > 0.05:
                 last_yaw = float(np.arctan2(ref_v[1], ref_v[0]))
             cmd = controller.step(p, v, q, w_body, ref_p, ref_v, last_yaw)

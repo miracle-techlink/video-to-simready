@@ -104,3 +104,34 @@ def test_reference_trajectory_bounds():
         xmin, ymin, xmax, ymax = FENCE_RECT
         assert xmin < pos[0] < xmax and ymin < pos[1] < ymax
         assert 0.5 < pos[2] < 12.0
+
+
+def test_smooth_reference_speed_bounded_and_settles():
+    from digua_hackathon.layout import MISSION_SPEED_MS, smooth_reference
+
+    duration = mission_duration_s() + 3.0
+    t = 0.0
+    while t <= duration:
+        _, v, _ = smooth_reference(t)
+        assert np.linalg.norm(v) <= MISSION_SPEED_MS + 1e-6
+        t += 0.1
+    p_end, v_end, label = smooth_reference(duration)
+    target = np.array(MISSION_WAYPOINTS[-1].position)
+    assert np.linalg.norm(p_end - target) < 0.2, f"not settled: {np.linalg.norm(p_end - target):.3f}"
+    assert np.linalg.norm(v_end) < 0.5
+
+
+def test_smooth_reference_clearance_positive():
+    """The smoothed reference is what actually flies; it must stay clear too."""
+    from digua_hackathon.layout import smooth_reference
+
+    obstacles = obstacles_for_clearance()
+    duration = mission_duration_s() + 2.0
+    t = 0.0
+    worst = np.inf
+    while t <= duration:
+        pos, _, _ = smooth_reference(t)
+        clear, _ = clearance_to_obstacles(pos, obstacles, ENVELOPE_RADIUS)
+        worst = min(worst, clear)
+        t += 0.05
+    assert worst > 0.05, f"smoothed route brushes obstacle: {worst:.3f} m"

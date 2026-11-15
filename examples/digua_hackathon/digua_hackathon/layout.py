@@ -282,3 +282,56 @@ def reference_trajectory(t: float) -> tuple[np.ndarray, np.ndarray, str]:
         time_left += b.hold_s
     p = np.array(MISSION_WAYPOINTS[-1].position, dtype=float)
     return p, np.zeros(3), MISSION_WAYPOINTS[-1].label
+
+
+# Smooth reference: first-order tracking of the bang-bang path removes the
+# velocity steps at waypoints so the PD controller (and the video) sees
+# flyable corners instead of 4 m catch-up transients.
+_SMOOTH_GAIN = 5.0  # 1/s; steady lag at cruise ~ speed/gain (~1 m)
+
+
+def _bang_bang_position(t: float) -> np.ndarray:
+    return reference_trajectory(t)[0]
+
+
+def smooth_reference_arrays(dt: float, duration_s: float) -> tuple[np.ndarray, np.ndarray, list[str]]:
+    """Dense smoothed reference samples: (positions (N,3), velocities (N,3), labels)."""
+    count = int(round(duration_s / dt)) + 1
+    positions = np.zeros((count, 3))
+    velocities = np.zeros((count, 3))
+    labels: list[str] = []
+    p = _bang_bang_position(0.0)
+    positions[0] = p
+    labels.append(reference_trajectory(0.0)[2])
+    for i in range(1, count):
+        t = i * dt
+        target = _bang_bang_position(t)
+        v = (target - p) * _SMOOTH_GAIN
+        speed = np.linalg.norm(v)
+        if speed > MISSION_SPEED_MS:
+            v *= MISSION_SPEED_MS / speed
+        p = p + v * dt
+        positions[i] = p
+        velocities[i] = v
+        labels.append(reference_trajectory(t)[2])
+    return positions, velocities, labels
+
+
+_SMOOTH_CACHE: dict[float, tuple[np.ndarray, np.ndarray, list[str], float]] = {}
+
+
+def smooth_reference(t: float) -> tuple[np.ndarray, np.ndarray, str]:
+    """Smoothed reference at time t (interpolated from dense cached samples)."""
+    dt = 1.0 / 240.0
+    duration = mission_duration_s() + 4.0
+    if dt not in _SMOOTH_CACHE:
+        _SMOOTH_CACHE[dt] = (*smooth_reference_arrays(dt, duration), duration)
+    positions, velocities, labels, span = _SMOOTH_CACHE[dt]
+    t_clamped = min(max(t, 0.0), span)
+    index = t_clamped / dt
+    low = int(np.floor(index))
+    high = min(low + 1, len(positions) - 1)
+    frac = index - low
+    p = positions[low] + (positions[high] - positions[low]) * frac
+    v = velocities[low] + (velocities[high] - velocities[low]) * frac
+    return p, v, labels[high]
