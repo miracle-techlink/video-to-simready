@@ -544,7 +544,8 @@ def _simulate(args: argparse.Namespace, settings: dict, app) -> None:
     rep.orchestrator.wait_until_complete()
     wall = time.perf_counter() - started
     _finalize(args, settings, rows, contacts_log, abort, wall, total_frames,
-              width, height, tracker.duration, bounds)
+              width, height, tracker.duration, bounds,
+              runtime_mass=runtime_mass, contact_view_ok=contact_view_ok)
 
 
 def _collect_preview(out: Path, frames_dir: Path, shots) -> None:
@@ -561,12 +562,17 @@ def _collect_preview(out: Path, frames_dir: Path, shots) -> None:
 
 
 def _finalize(args, settings, rows, contacts_log, abort, wall, total_frames,
-              width, height, mission_s, bounds) -> None:
+              width, height, mission_s, bounds, *, runtime_mass=None,
+              contact_view_ok=True) -> None:
     csv_path = args.out / f"trajectory_{args.mode}.csv"
-    with csv_path.open("w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
-        w.writeheader()
-        w.writerows(rows)
+    if rows:
+        fields = list(rows[0].keys())
+        with csv_path.open("w", newline="") as fh:
+            w = csv.DictWriter(fh, fieldnames=fields)
+            w.writeheader()
+            w.writerows(rows)
+    else:
+        csv_path.write_text("t,label\n")  # no ticks logged
     errors = [r["tracking_error_m"] for r in rows]
     videos = []
     frame_counts = {}
@@ -614,8 +620,9 @@ def _finalize(args, settings, rows, contacts_log, abort, wall, total_frames,
         "runtime_mass_kg": runtime_mass,
         "mission_s": round(mission_s, 2),
         "ticks": len(rows),
-        "tracking_rmse_m": float(np.sqrt(np.mean(np.square(errors)))),
-        "tracking_max_m": float(np.max(errors)),
+        "tracking_rmse_m": (float(np.sqrt(np.mean(np.square(errors))))
+                            if rows else None),
+        "tracking_max_m": (float(np.max(errors)) if rows else None),
         "contact_events": contacts_log,
         "contact_status": ("measured_body_vs_ground" if contact_view_ok
                            else "unavailable_after_failure"),
