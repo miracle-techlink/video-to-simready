@@ -53,6 +53,8 @@ def plan_benchmark_observation(
     return {
         "render_request": render_request,
         "view_set": view_set,
+        "request_path": str(Path(render_request_path).resolve()),
+        "view_set_path": str(Path(view_set_path).resolve()),
         "output_dir": str(output_dir),
         "views": view_set["views"],
     }
@@ -72,36 +74,83 @@ def run_benchmark_observation(
     """Execute a planned batch observation via the Isaac launcher.
 
     Uses launch_worker with a task graph; each view is a separate task
-    sharing the same GPU lease. Returns the aggregated receipt.
+    sharing the same GPU lease. The manifest bundle (request root) is the
+    worker's asset scope: under Docker it is mounted read-only at /assets,
+    which keeps the writable render output (/output) a sibling outside the
+    bundle instead of a mount conflict inside it. Returns the aggregated
+    receipt.
     """
     from simready.execution.workers.isaac_launcher import launch_worker
 
     render_request = plan["render_request"]
     view_set = plan["view_set"]
+    request_path = Path(plan["request_path"])
+    view_set_path = Path(plan["view_set_path"])
     output_dir = Path(plan["output_dir"])
     mode = render_request["image_settings"]["mode"]
     want_depth = mode == "rgbd"
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    repo = repo or Path.cwd()
+    assets = assets or request_path.parent
+
+    def _worker_visible(host_path):
+        """Translate host paths into worker-process paths for the backend.
+
+        Local workers see host paths verbatim; Docker workers only see the
+        repo/assets/output bind mounts, so any path outside them is a hard
+        error here rather than a silently broken argv inside the container.
+        """
+        if backend == "local":
+            return str(host_path)
+        from simready.execution.workers.isaac_container import container_path
+
+        mapped = container_path(host_path, repo=repo, assets=assets, output=output_dir)
+        if mapped is None:
+            raise ValueError(
+                f"Worker input {host_path} is outside the repo/assets/output "
+                f"mounts and invisible to the {backend} container"
+            )
+        return mapped
+
+    def _manifest_ref(path, root):
+        relative = Path(path).resolve().relative_to(root)
+        if ".." in relative.parts:
+            raise ValueError(f"Manifest reference escapes its root: {path}")
+        return {"path": relative.as_posix(), "sha256": digest(path)}
+
     plan_file = output_dir / "observation_plan.json"
     write_json(
         plan_file,
         {
-            "render_request": render_request,
-            "view_set": view_set,
+            "schema_version": 2,
+            "kind": "observation_plan",
+            "backend": backend,
+            # The worker re-reads and re-validates the manifest FILES against
+            # these roots; embedded copies below are cross-checked for drift.
+            "request_root": _worker_visible(request_path.parent),
+            "render_request": _manifest_ref(
+                request_path, request_path.parent.resolve()
+            ),
+            "view_set_root": _worker_visible(view_set_path.parent),
+            "view_set": _manifest_ref(view_set_path, view_set_path.parent.resolve()),
+            "output_dir": _worker_visible(output_dir),
             "mode": mode,
             "want_depth": want_depth,
+            "embedded_render_request": render_request,
+            "embedded_view_set": view_set,
         },
     )
 
     worker = [
         "-m",
         "simready.simulation.benchmark_observation",
+        "worker",
         "--plan",
-        str(plan_file),
+        _worker_visible(plan_file),
         "--out",
-        str(output_dir),
+        _worker_visible(output_dir),
     ]
 
     return launch_worker(
@@ -122,6 +171,8 @@ def _build_receipt(
     view_set: dict,
     views_result: list[dict],
     started: float,
+    *,
+    execution_backend: str | None = None,
 ) -> dict:
     """Build the receipt matching the fake_render_worker layout."""
     per_view = []
@@ -142,6 +193,7 @@ def _build_receipt(
         "synthetic_fixture": False,
         "banner": "Benchmark observation worker. Real rendering evidence.",
         "worker": "simready.simulation.benchmark_observation",
+        "execution_backend": execution_backend or "unspecified",
         "scene_id": render_request.get("scene", {}).get("path", "unknown"),
         "seed": render_request["seed"],
         "want_depth": render_request["image_settings"]["mode"] == "rgbd",
@@ -151,6 +203,74 @@ def _build_receipt(
         "expected": len(view_set["views"]),
         "duration_seconds": round(time.monotonic() - started, 6),
     }
+
+
+def _read_plan_manifests(plan_data, plan_path):
+    """Re-read the plan's manifest FILES and re-validate them at their roots.
+
+    The plan records the directory each manifest was originally validated
+    against plus a path+sha256 reference; manifests are never trusted from
+    the plan's embedded copies alone (those are only cross-checked for
+    drift). Relative references inside a manifest resolve against its true
+    root, not the plan file's directory or the worker's cwd.
+    """
+    if plan_data.get("schema_version") != 2:
+        raise ValueError(
+            "observation_plan requires schema_version=2 with explicit "
+            "manifest roots; rebuild the plan with run_benchmark_observation "
+            "from the current commit"
+        )
+    out = {}
+    for kind, root_key in (
+        ("render_request", "request_root"),
+        ("view_set", "view_set_root"),
+    ):
+        root = Path(plan_data[root_key])
+        ref = plan_data[kind]
+        path = (root / ref["path"]).resolve()
+        if not path.is_relative_to(root.resolve()):
+            raise ValueError(f"{kind} reference escapes its recorded root")
+        if not path.is_file():
+            raise ValueError(f"{kind} file missing at recorded root: {path}")
+        if digest(path) != ref["sha256"]:
+            raise ValueError(f"{kind} file hash drift: {path}")
+        manifest = read_json(path)
+        embedded_key = f"embedded_{kind}"
+        if embedded_key in plan_data and plan_data[embedded_key] != manifest:
+            raise ValueError(f"{kind} embedded copy differs from the manifest file")
+        out[kind] = (manifest, root)
+    request, request_root = out["render_request"]
+    view_set, view_set_root = out["view_set"]
+    validate_render_request(request, request_root)
+    validate_view_set(view_set, view_set_root)
+    return request, request_root, view_set, view_set_root
+
+
+def _usd_prim_names(view_ids):
+    """Map contract-legal view ids to legal, injective USD prim names.
+
+    USD prim names cannot contain characters like '-' and cannot start with
+    a digit; view ids such as 'view-0' would otherwise produce an empty
+    prim path. Mapping is deterministic, never collides for distinct ids,
+    and the receipt keeps the original ids untouched.
+    """
+    import hashlib
+    import re
+
+    mapping = {}
+    taken = set()
+    for view_id in view_ids:
+        base = re.sub(r"[^A-Za-z0-9_]", "_", view_id) or "view"
+        if base[0].isdigit() or base[0] == "_":
+            base = f"v{base}"
+        candidate = base
+        if candidate in taken:
+            candidate = f"{base}_{hashlib.sha256(view_id.encode()).hexdigest()[:8]}"
+        while candidate in taken:  # extreme adversarial collision: number it
+            candidate = f"{candidate}_x"
+        taken.add(candidate)
+        mapping[view_id] = candidate
+    return mapping
 
 
 def _worker_main(argv=None) -> int:
@@ -163,15 +283,22 @@ def _worker_main(argv=None) -> int:
     parser.add_argument("--subframes", type=int, default=8)
     parser.add_argument("--warmup-updates", type=int, default=12)
     parser.add_argument("--capture-attempts", type=int, default=8)
+    parser.add_argument(
+        "--ready-timeout-s",
+        type=float,
+        default=600.0,
+        help="Bounded renderer-readiness wait; cold shader caches compile for "
+        "minutes before the first frame",
+    )
     args = parser.parse_args(argv)
 
     plan_data = read_json(args.plan)
-    render_request = plan_data["render_request"]
-    view_set = plan_data["view_set"]
     want_depth = plan_data["want_depth"]
-
-    validate_render_request(render_request, args.plan.parent)
-    validate_view_set(view_set, args.plan.parent)
+    render_request, request_root, view_set, _ = _read_plan_manifests(
+        plan_data, args.plan
+    )
+    if Path(plan_data["output_dir"]).resolve() != args.out.resolve():
+        raise ValueError("Worker --out must match the plan's output_dir")
 
     out_dir = args.out
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -179,23 +306,26 @@ def _worker_main(argv=None) -> int:
 
     views_result = []
     app = None
+    completed = False
     try:
         import os
 
-        import carb
-        import omni.kit.app
-        import omni.timeline
-        import omni.usd
+        # SimulationApp must exist before any omni.*/carb/pxr import: kit
+        # modules are only importable after the app/experience boots.
         from isaacsim import SimulationApp
-        from PIL import Image
-        from pxr import UsdGeom, UsdLux
 
         app = SimulationApp(
             {"headless": True, "limit_cpu_threads": 4, "fast_shutdown": True},
             experience=os.path.join(os.environ["EXP_PATH"], "isaacsim.exp.base.kit"),
         )
 
+        import carb
+        import omni.kit.app
         import omni.replicator.core as rep
+        import omni.timeline
+        import omni.usd
+        from PIL import Image
+        from pxr import UsdGeom, UsdLux, UsdUtils
 
         omni.kit.app.get_app().get_extension_manager().set_extension_enabled_immediate(
             "omni.replicator.core", True
@@ -208,10 +338,22 @@ def _worker_main(argv=None) -> int:
             "/rtx/post/aa/op": 4,
             "/rtx/post/dlss/execMode": 2,
             "/rtx/dldenoiser/enabled": True,
+            # Match depth_observation gaussian-splat accumulation settings so
+            # splat scenes render identically through both workers.
+            "/rtx/rtpt/gaussian/accumulatedDepth/enabled": True,
+            "/rtx/rtpt/gaussian/accumulatedAlbedo/enabled": True,
+            "/rtx/rtpt/gaussian/maxGaussiansToAccumulate": 48,
         }.items():
             settings.set(key, value)
 
-        scene_path = Path(render_request["scene"]["path"])
+        scene_path = (request_root / render_request["scene"]["path"]).resolve()
+        if not scene_path.is_file():
+            raise ValueError(f"Scene file missing at manifest root: {scene_path}")
+        # Fail loudly on unresolved references instead of rendering a scene
+        # with silently missing sublayers/assets.
+        _, _, unresolved = UsdUtils.ComputeAllDependencies(str(scene_path))
+        if unresolved:
+            raise ValueError(f"Scene dependencies unresolved: {list(unresolved)[:8]}")
         if not omni.usd.get_context().open_stage(str(scene_path)):
             raise ValueError("Isaac could not open the source scene")
         omni.timeline.get_timeline_interface().pause()
@@ -227,6 +369,7 @@ def _worker_main(argv=None) -> int:
                 light.CreateIntensityAttr(300.0)
                 light.CreateExposureAttr(float(lighting.get("exposure", 0)))
 
+        prim_names = _usd_prim_names([v["view_id"] for v in view_set["views"]])
         for view in view_set["views"]:
             view_id = view["view_id"]
             np.asarray(view["intrinsics"], dtype=float)
@@ -247,7 +390,9 @@ def _worker_main(argv=None) -> int:
             camera_settings = calibration_to_usd_camera(calibration)
 
             camera_path = _create_observation_camera(
-                stage, camera_settings, scope_path=f"/SimReadyBenchmark/{view_id}"
+                stage,
+                camera_settings,
+                scope_path=f"/SimReadyBenchmark/{prim_names[view_id]}",
             )
 
             rgb, depth, statistics, captured_attempt = _capture_single_view(
@@ -262,6 +407,7 @@ def _worker_main(argv=None) -> int:
                 args.capture_attempts,
                 stage_units,
                 capture_mode="rgbd" if want_depth else "rgb",
+                ready_timeout_s=args.ready_timeout_s,
             )
 
             _validate_capture_result(
@@ -287,9 +433,22 @@ def _worker_main(argv=None) -> int:
 
             views_result.append(result)
 
-        receipt = _build_receipt(render_request, view_set, views_result, started)
+        expected_views = len(view_set["views"])
+        if len(views_result) != expected_views:
+            raise ValueError(
+                f"Captured {len(views_result)} of {expected_views} views; "
+                "a partial capture is a failure, not a receipt"
+            )
+        receipt = _build_receipt(
+            render_request,
+            view_set,
+            views_result,
+            started,
+            execution_backend=plan_data.get("backend"),
+        )
         write_json(out_dir / "receipt.json", receipt)
         print(f"Benchmark observation complete: {out_dir / 'receipt.json'}", flush=True)
+        completed = True
         return 0
     except BaseException as error:
         import traceback
@@ -304,8 +463,10 @@ def _worker_main(argv=None) -> int:
         write_json(out_dir / "failure.json", failure)
         return 1
     finally:
+        # Only a complete, receipt-written run closes the app with success;
+        # zero-view and partial-view failures must surface a nonzero exit.
         if app is not None:
-            app.close(exit_code=0 if not views_result else 1)
+            app.close(exit_code=0 if completed else 1)
 
 
 def main(argv=None) -> int:
@@ -334,6 +495,7 @@ def main(argv=None) -> int:
     worker_p.add_argument("--subframes", type=int, default=8)
     worker_p.add_argument("--warmup-updates", type=int, default=12)
     worker_p.add_argument("--capture-attempts", type=int, default=8)
+    worker_p.add_argument("--ready-timeout-s", type=float, default=600.0)
 
     args = parser.parse_args(argv)
     if args.command == "plan":
@@ -354,7 +516,12 @@ def main(argv=None) -> int:
             timeout_s=args.timeout_s,
         )
     elif args.command == "worker":
-        return _worker_main(argv)
+        import sys
+
+        # Strip the leading "worker" subcommand so _worker_main sees only the
+        # worker flags it defines (F-GPU-1: full argv double-parsed the token).
+        full = list(sys.argv[1:] if argv is None else argv)
+        return _worker_main(full[1:])
     else:
         parser.print_help()
         return 1

@@ -30,14 +30,33 @@ if args[0] == "run":
     sys.exit(0 if mode == "success" else 7)
 if args[0] == "inspect":
     if mode == "inspect-hang": time.sleep(30)
-    if mode in ("inspect-fail", "known-absent"): sys.exit(1)
+    if mode in ("inspect-fail", "known-absent", "name-absent", "name-neighbor", "name-present", "daemon-error", "id-query-error"): sys.exit(1)
     token = "wrong-owner" if mode == "mismatch" else (root / "token").read_text()
     print("a" * 64 + " " + token)
     sys.exit(0)
 if args[0] == "rm":
     sys.exit(9 if mode == "remove-fail" else 0)
 if args[0] == "container":
-    if mode != "known-absent": print("a" * 64)
+    if mode == "daemon-error":
+        print("Cannot connect to the Docker daemon at unix:///var/run/docker.sock", file=sys.stderr)
+        sys.exit(1)
+    fmt = args[args.index("--format") + 1]
+    if fmt == "{{.ID}}":
+        if mode == "id-query-error":
+            print("docker: error during connect", file=sys.stderr)
+            sys.exit(1)
+        if mode != "known-absent": print("a" * 64)
+        sys.exit(0)
+    # Name queries mirror real docker: an existing container (same name,
+    # whatever its ownership) is listed; a gone one is not.
+    filt = args[args.index("--filter") + 1]
+    name = filt[len("name=^/"):-1]
+    if mode == "name-neighbor":
+        print("simready-0123456789ab")
+        sys.exit(0)
+    if mode in ("name-present", "mismatch"):
+        print(name)
+        sys.exit(0)
     sys.exit(0)
 sys.exit(99)
 """

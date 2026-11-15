@@ -1,7 +1,10 @@
 """Benchmark observation worker: contract validation, receipt layout, failure semantics."""
 
+import copy
 import json
+import time
 
+import numpy as np
 import pytest
 
 from simready.core.artifacts import digest, write_json
@@ -10,7 +13,28 @@ from simready.core.benchmark_contract import (
 )
 
 
-def _view_set_manifest():
+def _view_set_manifest(view_ids=("front", "side")):
+    ids = tuple(view_ids)
+    if ids == ("front", "side"):
+        return _view_set_default_manifest()
+    template = _view_set_default_manifest()["views"]
+    views = []
+    for index, view_id in enumerate(ids):
+        view = copy.deepcopy(template[index % len(template)])
+        view["view_id"] = view_id
+        view["camera_evidence"]["path"] = f"cam_{view_id.replace(' ', '_')}.json"
+        views.append(view)
+    return {
+        "kind": "view_set",
+        "schema_version": 1,
+        "view_set_id": "vs-1",
+        "coordinate_frame": "world",
+        "unit": "m",
+        "views": views,
+    }
+
+
+def _view_set_default_manifest():
     return {
         "kind": "view_set",
         "schema_version": 1,
@@ -62,11 +86,11 @@ def _write_view_set(tmp_path, manifest=None):
     return path
 
 
-def _write_render_request(tmp_path, **overrides):
+def _write_render_request(tmp_path, *, view_ids=("front", "side"), **overrides):
     """Write a minimal valid render request manifest."""
     scene_file = tmp_path / "scene.usda"
     scene_file.write_text("#usda 1.0\n")
-    view_set_file = _write_view_set(tmp_path)
+    view_set_file = _write_view_set(tmp_path, _view_set_manifest(view_ids))
     reconstruction_file = tmp_path / "reconstruction.json"
     reconstruction_file.write_text(json.dumps({"schema_version": 1}))
 
@@ -318,3 +342,1023 @@ class TestFailureSemantics:
         )
         assert receipt["completed"] == 1
         assert receipt["expected"] == 3
+
+
+class _KitFinder:
+    """Meta-path stub for isaacsim/omni/carb/pxr reproducing kit import rules.
+
+    Kit-only modules raise ModuleNotFoundError when imported before a
+    SimulationApp exists — the exact live failure mode of F-GPU-2 — and every
+    served import is journaled so tests can assert import/creation order.
+    """
+
+    KIT_ONLY = {
+        "carb",
+        "omni.kit.app",
+        "omni.timeline",
+        "omni.usd",
+        "omni.replicator.core",
+        "pxr",
+    }
+
+    def __init__(self, state):
+        self._state = state
+
+    def find_spec(self, fullname, path=None, target=None):
+        if not (
+            fullname == "isaacsim"
+            or fullname in {"carb", "pxr"}
+            or fullname.startswith("omni")
+        ):
+            return None
+        import importlib.machinery
+
+        return importlib.machinery.ModuleSpec(
+            fullname, _KitLoader(fullname, self._state), is_package=True
+        )
+
+
+class _KitLoader:
+    def __init__(self, fullname, state):
+        self._fullname = fullname
+        self._state = state
+
+    def create_module(self, spec):
+        import types
+
+        return types.ModuleType(self._fullname)
+
+    def exec_module(self, module):
+        state = self._state
+        if self._fullname in _KitFinder.KIT_ONLY and not state["app_created"]:
+            raise ModuleNotFoundError(
+                f"No module named {self._fullname!r} "
+                "(kit modules are importable only after SimulationApp)"
+            )
+        state["journal"].append(("import", self._fullname))
+        module.__path__ = []
+        _populate(self._fullname, module, state)
+
+
+def _populate(name, module, state):
+    import types
+
+    class _Settings:
+        def set(self, key, value):
+            state["settings"].append((key, value))
+            state["journal"].append(("settings:set", key))
+
+    class _ExtensionManager:
+        def set_extension_enabled_immediate(self, ext, enabled):
+            state["journal"].append(("ext:enable", ext))
+
+    class _App:
+        def get_extension_manager(self):
+            return _ExtensionManager()
+
+    class _Timeline:
+        def pause(self):
+            state["journal"].append(("timeline:pause",))
+
+    class _Context:
+        def open_stage(self, path):
+            state["journal"].append(("stage:open", path))
+            return True
+
+        def get_stage(self):
+            return state["stage"]
+
+    class _Stage:
+        def SetEditTarget(self, layer):  # noqa: N802
+            state["journal"].append(("stage:edit-target",))
+
+        def GetSessionLayer(self):  # noqa: N802 USD API
+            return object()
+
+        def Traverse(self):  # noqa: N802
+            return iter(())
+
+    if name == "isaacsim":
+
+        class _SimulationApp:
+            def __init__(self, config, experience=None):
+                if not config.get("headless"):
+                    raise ValueError("stub requires headless config")
+                state["app_created"] = True
+                state["journal"].append(("app:create",))
+
+            def close(self, exit_code=0):
+                state["journal"].append(("app:close", exit_code))
+
+        module.SimulationApp = _SimulationApp
+    elif name == "carb":
+        module.settings = types.SimpleNamespace(get_settings=lambda: _Settings())
+    elif name == "omni.kit.app":
+        module.get_app = lambda: _App()
+    elif name == "omni.timeline":
+        module.get_timeline_interface = lambda: _Timeline()
+    elif name == "omni.usd":
+        state["stage"] = _Stage()
+        module.get_context = lambda: _Context()
+    elif name == "pxr":
+
+        def _define_dome_light(stage, path):  # noqa: N802-free USD mirror
+            return types.SimpleNamespace()
+
+        module.UsdGeom = types.SimpleNamespace(GetStageMetersPerUnit=lambda stage: 1.0)
+        module.UsdLux = types.SimpleNamespace(
+            DomeLight=types.SimpleNamespace(Define=_define_dome_light),
+            LightAPI=object,
+        )
+
+        def _compute_all_dependencies(path):
+            state["journal"].append(("deps:compute", path))
+            return [], [], list(state["unresolved"])
+
+        module.UsdUtils = types.SimpleNamespace(
+            ComputeAllDependencies=_compute_all_dependencies
+        )
+    elif name == "omni.replicator.core":
+        module.annotator = types.SimpleNamespace()
+
+
+_STUB_MODULES = [
+    "isaacsim",
+    "carb",
+    "omni",
+    "omni.kit",
+    "omni.kit.app",
+    "omni.timeline",
+    "omni.usd",
+    "omni.replicator",
+    "omni.replicator.core",
+    "pxr",
+]
+
+
+def _fresh_state():
+    return {
+        "app_created": False,
+        "journal": [],
+        "settings": [],
+        "unresolved": [],
+        "stage": None,
+    }
+
+
+@pytest.fixture
+def kit_env(monkeypatch):
+    """Install kit import stubs; yield the shared journal/state."""
+    import sys
+
+    state = _fresh_state()
+    finder = _KitFinder(state)
+    sys.meta_path.insert(0, finder)
+    for name in _STUB_MODULES:
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    monkeypatch.setenv("EXP_PATH", "/stub/isaacsim")
+    yield state
+    sys.meta_path.remove(finder)
+    # Purge any stub the import system cached during the test so later
+    # tests resolve the real (or absent) modules again.
+    for name in _STUB_MODULES:
+        sys.modules.pop(name, None)
+
+
+def _write_worker_plan(tmp_path, *, view_ids=("front", "side")):
+    """Bundle manifests in their own root and write a schema-2 worker plan."""
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    req_path = _write_render_request(bundle, view_ids=view_ids)
+    vs_path = bundle / "view_set.json"
+    out = tmp_path / "worker-out"
+    plan = {
+        "schema_version": 2,
+        "kind": "observation_plan",
+        "request_root": str(bundle),
+        "render_request": {
+            "path": "render_request.json",
+            "sha256": digest(req_path),
+        },
+        "view_set_root": str(bundle),
+        "view_set": {"path": "view_set.json", "sha256": digest(vs_path)},
+        "output_dir": str(out),
+        "mode": "rgb",
+        "want_depth": False,
+        "embedded_render_request": json.loads(req_path.read_text()),
+        "embedded_view_set": json.loads(vs_path.read_text()),
+    }
+    plan_path = tmp_path / "observation_plan.json"
+    write_json(plan_path, plan)
+    return plan_path
+
+
+def _stub_capture(monkeypatch):
+    import numpy as np
+
+    import simready.simulation.benchmark_observation as bo
+
+    def _camera(stage, settings, scope_path=None):
+        return f"{scope_path}/cam"
+
+    def _capture(
+        rep,
+        camera_path,
+        width,
+        height,
+        want_depth,
+        app,
+        warmup,
+        subframes,
+        attempts,
+        stage_units,
+        capture_mode,
+        ready_timeout_s=600.0,
+    ):
+        rgb = np.full((height, width, 4), 127, dtype=np.uint8)
+        return rgb, None, {}, 1
+
+    monkeypatch.setattr(bo, "_create_observation_camera", _camera)
+    monkeypatch.setattr(bo, "_capture_single_view", _capture)
+    monkeypatch.setattr(
+        bo, "_validate_capture_result", lambda rgb, depth, capture_mode: None
+    )
+
+
+class TestWorkerLaunchPath:
+    """Worker subcommand/argv must reach the real worker (F-GPU-1)."""
+
+    def test_worker_subcommand_launches_real_worker(
+        self, tmp_path, kit_env, monkeypatch
+    ):
+        """`main(['worker', ...])` must parse and complete, not argparse-error."""
+        from simready.simulation.benchmark_observation import main
+
+        _stub_capture(monkeypatch)
+        plan_path = _write_worker_plan(tmp_path)
+        out = tmp_path / "worker-out"
+        rc = main(["worker", "--plan", str(plan_path), "--out", str(out)])
+        failure = out / "failure.json"
+        assert rc == 0, failure.read_text() if failure.exists() else "no receipt"
+        receipt = json.loads((out / "receipt.json").read_text())
+        assert receipt["completed"] == 2
+        assert receipt["synthetic_fixture"] is False
+
+    def test_kit_imports_only_after_simulation_app(
+        self, tmp_path, kit_env, monkeypatch
+    ):
+        """omni.*/carb/pxr imports must follow SimulationApp creation (F-GPU-2)."""
+        from simready.simulation.benchmark_observation import main
+
+        _stub_capture(monkeypatch)
+        plan_path = _write_worker_plan(tmp_path)
+        rc = main(
+            ["worker", "--plan", str(plan_path), "--out", str(tmp_path / "worker-out")]
+        )
+        assert rc == 0
+        journal = kit_env["journal"]
+        app_at = next(i for i, e in enumerate(journal) if e[0] == "app:create")
+        kit_imports = [
+            i
+            for i, e in enumerate(journal)
+            if e[0] == "import" and e[1] in _KitFinder.KIT_ONLY
+        ]
+        assert kit_imports and min(kit_imports) > app_at, journal
+
+    def test_orchestrated_worker_argv_parses_through_main(
+        self, tmp_path, kit_env, monkeypatch
+    ):
+        """run_benchmark_observation's worker argv must parse via main()."""
+        from simready.simulation.benchmark_observation import (
+            main,
+            plan_benchmark_observation,
+            run_benchmark_observation,
+        )
+
+        req_path = _write_render_request(tmp_path)
+        vs_path = tmp_path / "view_set.json"
+        plan = plan_benchmark_observation(req_path, vs_path, tmp_path / "out")
+        captured = {}
+
+        def _fake_launch_worker(worker, **kwargs):
+            captured["argv"] = list(worker)
+            return {"returncode": 0}
+
+        import simready.execution.workers.isaac_launcher as launcher
+
+        monkeypatch.setattr(launcher, "launch_worker", _fake_launch_worker)
+        run_benchmark_observation(plan, backend="local")
+        argv = captured["argv"]
+        assert argv[:3] == [
+            "-m",
+            "simready.simulation.benchmark_observation",
+            "worker",
+        ]
+        # The exact argv the orchestrator builds must parse through main().
+        # The plan validates references relative to its own directory, so the
+        # frozen manifest files must sit next to observation_plan.json.
+        _stub_capture(monkeypatch)
+        out_dir = tmp_path / "out"
+        for manifest_file in tmp_path.iterdir():
+            if manifest_file.is_file() and manifest_file.name != "plan.json":
+                import shutil
+
+                shutil.copy(manifest_file, out_dir / manifest_file.name)
+        rc = main(argv[2:])
+        assert rc == 0, argv
+
+    def test_gaussian_settings_and_dependency_check(
+        self, tmp_path, kit_env, monkeypatch
+    ):
+        """F-GPU-3: splat render settings set; unresolved layers fail loudly."""
+        from simready.simulation.benchmark_observation import main
+
+        _stub_capture(monkeypatch)
+        plan_path = _write_worker_plan(tmp_path)
+        out = tmp_path / "worker-out"
+        assert main(["worker", "--plan", str(plan_path), "--out", str(out)]) == 0
+        applied = dict(kit_env["settings"])
+        assert applied["/rtx/rtpt/gaussian/accumulatedDepth/enabled"] is True
+        assert applied["/rtx/rtpt/gaussian/accumulatedAlbedo/enabled"] is True
+        assert applied["/rtx/rtpt/gaussian/maxGaussiansToAccumulate"] == 48
+        journal = kit_env["journal"]
+        deps_at = next(i for i, e in enumerate(journal) if e[0] == "deps:compute")
+        open_at = next(i for i, e in enumerate(journal) if e[0] == "stage:open")
+        assert deps_at < open_at, journal
+
+        # Negative: unresolved layer must abort before rendering.
+        kit_env["unresolved"] = ["missing_cabinet.usd"]
+        (out / "receipt.json").unlink(missing_ok=True)
+        rc = main(["worker", "--plan", str(plan_path), "--out", str(out)])
+        assert rc == 1
+        failure = json.loads((out / "failure.json").read_text())
+        assert "missing_cabinet.usd" in failure["error"]
+
+    def test_cli_help_needs_no_isaac(self, tmp_path):
+        """`--help` (and module import) must never require Isaac (CLI contract)."""
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        repo = Path(__file__).resolve().parents[2]
+        env = {"PYTHONPATH": str(repo / "src"), "PATH": "/usr/bin:/bin"}
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "simready.simulation.benchmark_observation",
+                "--help",
+            ],
+            capture_output=True,
+            env=env,
+            cwd=repo,
+            timeout=120,
+        )
+        assert proc.returncode == 0, proc.stderr.decode()
+        assert b"worker" in proc.stdout
+
+
+class TestWorkerManifestRootAndExitCodes:
+    """F-GPU-6/7: manifest roots survive plan->worker; exit codes honest."""
+
+    def test_production_chain_with_distinct_cwd_input_output(
+        self, tmp_path, kit_env, monkeypatch
+    ):
+        """cwd != input != output: real plan->run->worker with only the Isaac
+        execution boundary stubbed; receipts keep original view ids."""
+        from simready.simulation.benchmark_observation import (
+            main,
+            plan_benchmark_observation,
+            run_benchmark_observation,
+        )
+
+        repo = tmp_path / "repo"
+        (repo / "bundle").mkdir(parents=True)
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        monkeypatch.chdir(elsewhere)
+
+        bundle = repo / "bundle"
+        req_path = _write_render_request(
+            bundle, view_ids=("view-0", "view_0", "0start", "sp ace")
+        )
+        vs_path = bundle / "view_set.json"
+        first_evidence = json.loads(vs_path.read_text())["views"][0]["camera_evidence"][
+            "path"
+        ]
+        frozen = {
+            "request": digest(req_path),
+            "view_set": digest(vs_path),
+            "scene": digest(bundle / "scene.usda"),
+            "evidence": digest(bundle / first_evidence),
+        }
+        out_dir = tmp_path / "run-out"
+
+        captured = {}
+
+        def _capture_argv(worker, **kwargs):
+            captured["argv"] = list(worker)
+            return {"returncode": 0}
+
+        import simready.execution.workers.isaac_launcher as launcher
+
+        monkeypatch.setattr(launcher, "launch_worker", _capture_argv)
+
+        plan = plan_benchmark_observation(req_path, vs_path, out_dir)
+        run_benchmark_observation(plan, backend="local", repo=repo, assets=repo)
+
+        # Execute the exact production argv through main() from a foreign cwd.
+        _stub_capture(monkeypatch)
+        rc = main(captured["argv"][2:])
+        assert rc == 0, captured["argv"]
+        receipt = json.loads((out_dir / "receipt.json").read_text())
+        assert [v["view_id"] for v in receipt["views"]] == [
+            "view-0",
+            "view_0",
+            "0start",
+            "sp ace",
+        ]
+        assert receipt["completed"] == receipt["expected"] == 4
+        assert receipt["execution_backend"] == "local"
+        # Nothing frozen was rewritten by planning/execution.
+        assert digest(req_path) == frozen["request"]
+        assert digest(vs_path) == frozen["view_set"]
+        assert digest(bundle / "scene.usda") == frozen["scene"]
+        assert digest(bundle / first_evidence) == frozen["evidence"]
+        # app.close(0) only after the complete receipt.
+        assert kit_env["journal"][-1] == ("app:close", 0)
+
+    def test_docker_backend_maps_plan_and_roots_into_container(
+        self, tmp_path, monkeypatch
+    ):
+        """Docker argv and plan roots use /workspace,/assets,/output mounts."""
+        from simready.simulation.benchmark_observation import (
+            plan_benchmark_observation,
+            run_benchmark_observation,
+        )
+
+        repo = tmp_path / "repo"
+        assets = tmp_path / "assets"
+        out_dir = tmp_path / "out"
+        assets.mkdir()
+        out_dir.mkdir()
+        bundle = repo / "bundle"
+        bundle.mkdir(parents=True)
+        req_path = _write_render_request(bundle)
+        vs_path = bundle / "view_set.json"
+        captured = {}
+
+        def _capture_argv(worker, **kwargs):
+            captured["argv"] = list(worker)
+            return {"returncode": 0}
+
+        import simready.execution.workers.isaac_launcher as launcher
+
+        monkeypatch.setattr(launcher, "launch_worker", _capture_argv)
+        plan = plan_benchmark_observation(req_path, vs_path, out_dir)
+        run_benchmark_observation(plan, backend="docker", repo=repo, assets=assets)
+        argv = captured["argv"]
+        assert argv[argv.index("--plan") + 1] == "/output/observation_plan.json"
+        assert argv[argv.index("--out") + 1] == "/output"
+        plan_data = json.loads((out_dir / "observation_plan.json").read_text())
+        assert plan_data["request_root"] == "/workspace/bundle"
+        assert plan_data["view_set_root"] == "/workspace/bundle"
+        assert plan_data["output_dir"] == "/output"
+
+    def test_docker_backend_rejects_unmounted_worker_inputs(
+        self, tmp_path, monkeypatch
+    ):
+        """Inputs outside repo/assets/output are invisible in-container: fail
+        loudly at launch, not inside the container."""
+        from simready.simulation.benchmark_observation import (
+            plan_benchmark_observation,
+            run_benchmark_observation,
+        )
+
+        repo = tmp_path / "repo"
+        assets = tmp_path / "assets"
+        out_dir = tmp_path / "out"
+        repo.mkdir()
+        assets.mkdir()
+        out_dir.mkdir()
+        stray = tmp_path / "stray"
+        stray.mkdir()
+        req_path = _write_render_request(stray)
+        vs_path = stray / "view_set.json"
+        plan = plan_benchmark_observation(req_path, vs_path, out_dir)
+        with pytest.raises(ValueError, match="invisible to the docker"):
+            run_benchmark_observation(plan, backend="docker", repo=repo, assets=assets)
+
+    def test_v1_plan_without_roots_rejected(self, tmp_path, kit_env, monkeypatch):
+        """Old embedded-only plans fail loudly instead of guessing a root."""
+        from simready.simulation.benchmark_observation import main
+
+        req_path = _write_render_request(tmp_path)
+        vs_path = tmp_path / "view_set.json"
+        legacy = {
+            "render_request": json.loads(req_path.read_text()),
+            "view_set": json.loads(vs_path.read_text()),
+            "mode": "rgb",
+            "want_depth": False,
+        }
+        plan_path = tmp_path / "legacy_plan.json"
+        write_json(plan_path, legacy)
+        with pytest.raises(ValueError, match="schema_version=2"):
+            main(["worker", "--plan", str(plan_path), "--out", str(tmp_path / "o")])
+
+    def test_manifest_drift_rejected(self, tmp_path, kit_env, monkeypatch):
+        """Manifest file changing after planning must fail hash verification."""
+        from simready.simulation.benchmark_observation import main
+
+        plan_path = _write_worker_plan(tmp_path)
+        # Drift the view set file after the plan froze its hash.
+        vs = json.loads((tmp_path / "bundle" / "view_set.json").read_text())
+        vs["views"][0]["view_id"] = "drifted"
+        write_json(tmp_path / "bundle" / "view_set.json", vs)
+        with pytest.raises(ValueError, match="hash drift"):
+            main(
+                [
+                    "worker",
+                    "--plan",
+                    str(plan_path),
+                    "--out",
+                    str(tmp_path / "worker-out"),
+                ]
+            )
+
+    def test_partial_capture_fails_with_nonzero_close_and_rc(
+        self, tmp_path, kit_env, monkeypatch
+    ):
+        """A view failing mid-run must produce rc!=0, failure.json and a
+        nonzero app.close even though earlier views succeeded."""
+        import simready.simulation.benchmark_observation as bo
+        from simready.simulation.benchmark_observation import main
+
+        plan_path = _write_worker_plan(tmp_path)
+        _stub_capture(monkeypatch)
+        stub_capture = bo._capture_single_view
+        calls = {"n": 0}
+
+        def _flaky(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise RuntimeError("view 1 capture exploded")
+            return stub_capture(*args, **kwargs)
+
+        monkeypatch.setattr(bo, "_capture_single_view", _flaky)
+        out = tmp_path / "worker-out"
+        rc = main(["worker", "--plan", str(plan_path), "--out", str(out)])
+        assert rc == 1
+        failure = json.loads((out / "failure.json").read_text())
+        assert "capture exploded" in failure["error"]
+        assert not (out / "receipt.json").exists()
+        assert kit_env["journal"][-1] == ("app:close", 1)
+
+    def test_view_id_prim_mapping_legal_and_injective(
+        self, tmp_path, kit_env, monkeypatch
+    ):
+        """Contract-legal ids (hyphens, leading digits, spaces) map to legal,
+        distinct USD prims; receipts keep the original ids."""
+        from simready.simulation.benchmark_observation import main
+
+        plan_path = _write_worker_plan(
+            tmp_path, view_ids=("view-0", "view_0", "0start", "sp ace")
+        )
+        scopes = []
+        import numpy as np
+
+        import simready.simulation.benchmark_observation as bo
+
+        def _camera(stage, settings, scope_path=None):
+            scopes.append(scope_path)
+            return f"{scope_path}/cam"
+
+        monkeypatch.setattr(bo, "_create_observation_camera", _camera)
+
+        def _capture(
+            rep,
+            camera_path,
+            width,
+            height,
+            want_depth,
+            app,
+            warmup,
+            subframes,
+            attempts,
+            stage_units,
+            capture_mode,
+            ready_timeout_s=600.0,
+        ):
+            return (np.full((height, width, 4), 90, dtype=np.uint8), None, {}, 1)
+
+        monkeypatch.setattr(bo, "_capture_single_view", _capture)
+        monkeypatch.setattr(
+            bo, "_validate_capture_result", lambda rgb, depth, capture_mode: None
+        )
+        rc = main(
+            ["worker", "--plan", str(plan_path), "--out", str(tmp_path / "worker-out")]
+        )
+        assert rc == 0
+        import re
+
+        for scope in scopes:
+            prim = scope.rsplit("/", 1)[-1]
+            assert re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", prim), scope
+        assert len(set(scopes)) == len(scopes), scopes
+        receipt = json.loads((tmp_path / "worker-out" / "receipt.json").read_text())
+        assert [v["view_id"] for v in receipt["views"]] == [
+            "view-0",
+            "view_0",
+            "0start",
+            "sp ace",
+        ]
+
+    def test_docker_auto_geometry_mounts_bundle_as_readonly_assets(
+        self, tmp_path, monkeypatch
+    ):
+        """F-GPU-8: bundle outside the repo tree is mounted read-only as the
+        assets scope; render output is its writable sibling. Exercised through
+        the public run_benchmark_observation -> launch_worker ->
+        container_command mapping; only the docker process spawn is stubbed."""
+        from simready.simulation.benchmark_observation import (
+            plan_benchmark_observation,
+            run_benchmark_observation,
+        )
+
+        repo = tmp_path / "worktree"
+        repo.mkdir()
+        member = tmp_path / "suite" / "evaluation" / "m"
+        bundle = member / "render-input"
+        bundle.mkdir(parents=True)
+        output_dir = member / "render-output"
+        req_path = _write_render_request(bundle)
+        vs_path = bundle / "view_set.json"
+
+        captured = {}
+
+        def _fake_execute(command, **kwargs):
+            captured["command"] = list(command)
+            return {"returncode": 0}
+
+        import simready.execution.workers.isaac_launcher as launcher
+
+        monkeypatch.setattr(launcher, "_execute_launch", _fake_execute)
+
+        plan = plan_benchmark_observation(req_path, vs_path, output_dir)
+        run_benchmark_observation(plan, backend="docker", repo=repo)
+
+        command = captured["command"]
+        mounts = [a for a in command if a.startswith("type=bind,src=")]
+        assert f"type=bind,src={bundle},dst=/assets,readonly" in mounts, mounts
+        assert f"type=bind,src={output_dir},dst=/output" in mounts, mounts
+        assert f"type=bind,src={repo},dst=/workspace,readonly" in mounts, mounts
+        # Worker argv uses container-visible plan/output paths.
+        argv = command[command.index("worker") :]
+        assert argv[:3] == [
+            "worker",
+            "--plan",
+            "/output/observation_plan.json",
+        ]
+        assert argv[argv.index("--out") + 1] == "/output"
+        # The plan records the real backend and container-side roots.
+        plan_data = json.loads((output_dir / "observation_plan.json").read_text())
+        assert plan_data["backend"] == "docker"
+        assert plan_data["request_root"] == "/assets"
+        assert plan_data["view_set_root"] == "/assets"
+        assert plan_data["output_dir"] == "/output"
+        # Writable output never sits inside the read-only bundle mount.
+        assert not output_dir.is_relative_to(bundle)
+
+
+class TestRendererReadiness:
+    """F-GPU-9: cold shader caches must wait (bounded) or fail loudly."""
+
+    @staticmethod
+    def _fake_rep(empty_for, *, dtype=np.uint8, shape=(8, 8, 4), std=40.0):
+        """rep stub whose rgb annotator stays empty for the first N reads."""
+        import types
+
+        state = {"reads": 0}
+
+        class _Annotator:
+            def __init__(self, name):
+                self.name = name
+
+            def attach(self, product):
+                pass
+
+            def get_data(self):
+                state["reads"] += 1
+                if state["reads"] <= empty_for:
+                    return np.zeros((0,), dtype=np.uint8)
+                frame = np.full(shape, 120, dtype=dtype)
+                if std:
+                    frame[..., 0] = 40
+                    frame[..., 1] = 200  # std well above the uniform guard
+                return frame
+
+        class _App:
+            def update(self):
+                state.setdefault("updates", 0)
+                state["updates"] += 1
+
+        rep = types.SimpleNamespace(
+            create=types.SimpleNamespace(render_product=lambda cam, res: object()),
+            AnnotatorRegistry=types.SimpleNamespace(
+                get_annotator=lambda name: _Annotator(name)
+            ),
+            orchestrator=types.SimpleNamespace(
+                step=lambda **kw: None, wait_until_complete=lambda: None
+            ),
+        )
+        return rep, _App(), state
+
+    def test_cold_cache_waits_until_frames_arrive(self):
+        """Annotator empty for 30 reads (cold compile) then real frames:
+        capture must wait and succeed - no fake data, no early failure."""
+        from simready.simulation.depth_observation import _capture_single_view
+
+        rep, app, state = self._fake_rep(empty_for=30)
+        rgb, depth, stats, attempt = _capture_single_view(
+            rep,
+            "/Cam",
+            8,
+            8,
+            False,
+            app,
+            warmup_updates=2,
+            subframes=2,
+            capture_attempts=4,
+            stage_units=1.0,
+            capture_mode="rgb",
+            ready_timeout_s=30.0,
+        )
+        assert rgb.shape == (8, 8, 4) and rgb.dtype == np.uint8
+        assert depth is None
+        assert attempt >= 1
+        assert state["reads"] > 30  # actually waited through the cold period
+
+    def test_cold_cache_timeout_fails_loudly(self):
+        """Renderer never produces frames: bounded, diagnosable readiness
+        error - NOT the generic raster mismatch after eight blind attempts."""
+        from simready.simulation.depth_observation import _capture_single_view
+
+        rep, app, _ = self._fake_rep(empty_for=10**9)
+        with pytest.raises(ValueError, match="Renderer produced no frames"):
+            _capture_single_view(
+                rep,
+                "/Cam",
+                8,
+                8,
+                False,
+                app,
+                warmup_updates=1,
+                subframes=1,
+                capture_attempts=4,
+                stage_units=1.0,
+                capture_mode="rgb",
+                ready_timeout_s=0.3,
+            )
+
+    def test_warm_cache_immediate_capture_unchanged(self):
+        """Frames already flowing: success on the first attempt as before."""
+        from simready.simulation.depth_observation import _capture_single_view
+
+        rep, app, _ = self._fake_rep(empty_for=0)
+        rgb, _, _, attempt = _capture_single_view(
+            rep,
+            "/Cam",
+            8,
+            8,
+            False,
+            app,
+            warmup_updates=1,
+            subframes=2,
+            capture_attempts=4,
+            stage_units=1.0,
+            capture_mode="rgb",
+            ready_timeout_s=10.0,
+        )
+        assert attempt == 1 and rgb.shape == (8, 8, 4)
+
+    def test_raster_validation_not_weakened(self):
+        """Data arriving with the wrong dtype must still be rejected by the
+        existing uint8 raster guard (readiness never bypasses validation)."""
+        from simready.simulation.depth_observation import _capture_single_view
+
+        rep, app, _ = self._fake_rep(empty_for=0, dtype=np.float32)
+        with pytest.raises(ValueError, match="not a matching uint8 raster"):
+            _capture_single_view(
+                rep,
+                "/Cam",
+                8,
+                8,
+                False,
+                app,
+                warmup_updates=1,
+                subframes=2,
+                capture_attempts=2,
+                stage_units=1.0,
+                capture_mode="rgb",
+                ready_timeout_s=10.0,
+            )
+
+
+class _NoopOrchestrator:
+    def step(self, **kwargs):
+        pass
+
+    def wait_until_complete(self):
+        pass
+
+
+class TestRendererReadinessControls:
+    """Astra-review controls for the readiness gate."""
+
+    def test_dict_wrapped_empty_buffer_recognized_as_not_ready(self):
+        """Replicator may wrap data as {'data': ...}; an empty dict-wrapped
+        buffer must keep waiting, not count as a size-1 scalar ready."""
+        from simready.simulation.depth_observation import wait_for_renderer_frames
+
+        state = {"reads": 0}
+
+        class _Annotator:
+            def get_data(self):
+                state["reads"] += 1
+                if state["reads"] <= 3:
+                    return {"data": np.zeros((0,), dtype=np.uint8)}
+                return {"data": np.ones((4, 4, 4), dtype=np.uint8)}
+
+        class _App:
+            def update(self):
+                pass
+
+        class _Orch:
+            def step(self, **kw):
+                pass
+
+            def wait_until_complete(self):
+                pass
+
+        elapsed = wait_for_renderer_frames(
+            _App(), _Orch(), [("rgb", _Annotator())], timeout_s=5.0
+        )
+        assert state["reads"] >= 4 and elapsed <= 5.0
+
+    def test_rgbd_readiness_requires_depth_too(self):
+        """RGB ready but depth still empty must keep waiting (rgbd)."""
+        from simready.simulation.depth_observation import wait_for_renderer_frames
+
+        state = {"reads": 0}
+
+        class _Rgb:
+            def get_data(self):
+                return np.ones((4, 4, 4), dtype=np.uint8)
+
+        class _Depth:
+            def get_data(self):
+                state["reads"] += 1
+                if state["reads"] <= 2:
+                    return np.zeros((0,), dtype=np.float32)
+                return np.ones((4, 4), dtype=np.float32)
+
+        class _App:
+            def update(self):
+                pass
+
+        class _Orch:
+            def step(self, **kw):
+                pass
+
+            def wait_until_complete(self):
+                pass
+
+        wait_for_renderer_frames(
+            _App(), _Orch(), [("rgb", _Rgb()), ("depth", _Depth())], timeout_s=5.0
+        )
+        assert state["reads"] >= 3
+
+    def test_invalid_timeout_rejected_before_any_work(self):
+        from simready.simulation.depth_observation import (
+            _capture_single_view,
+            wait_for_renderer_frames,
+        )
+
+        class _Explodes:
+            def __getattr__(self, name):
+                raise AssertionError("no work may happen for invalid timeout")
+
+        for bad in (0.0, -1.0, float("nan"), float("inf")):
+            with pytest.raises(ValueError, match="finite positive"):
+                wait_for_renderer_frames(_Explodes(), _Explodes(), [], bad)
+            with pytest.raises(ValueError, match="finite positive"):
+                _capture_single_view(
+                    _Explodes(),
+                    "/c",
+                    8,
+                    8,
+                    False,
+                    _Explodes(),
+                    warmup_updates=1,
+                    subframes=1,
+                    capture_attempts=1,
+                    stage_units=1.0,
+                    capture_mode="rgb",
+                    ready_timeout_s=bad,
+                )
+
+    def test_blocking_update_overshoot_reports_timeout_not_success(self):
+        """Deadline is checked before success: one blocking update that
+        returns after the deadline (with data) still reports timeout."""
+        from simready.simulation.depth_observation import wait_for_renderer_frames
+
+        class _SlowApp:
+            def update(self):
+                time.sleep(0.25)
+
+        class _Ready:
+            def get_data(self):
+                return np.ones((4, 4, 4), dtype=np.uint8)
+
+        with pytest.raises(ValueError, match="produced no frames"):
+            wait_for_renderer_frames(
+                _SlowApp(), _NoopOrchestrator(), [("rgb", _Ready())], timeout_s=0.05
+            )
+
+    def test_malformed_annotator_payload_propagates(self):
+        """A malformed dict payload must surface its real error, not be
+        silently treated as ready/empty."""
+        from simready.simulation.depth_observation import wait_for_renderer_frames
+
+        class _Broken:
+            def get_data(self):
+                return {"unexpected": True}
+
+        class _App:
+            def update(self):
+                pass
+
+        with pytest.raises(KeyError):
+            wait_for_renderer_frames(
+                _App(), _NoopOrchestrator(), [("rgb", _Broken())], timeout_s=1.0
+            )
+
+    def test_buffers_filling_only_after_step_still_reach_ready(self):
+        """Isaac 6.1 behavior pin: annotator buffers stay empty through bare
+        app.update() and only fill after an orchestrator step (observed live:
+        600s of updates produced nothing on a cold cache; the first step
+        filled them). Readiness must therefore tick a discarded step."""
+        from simready.simulation.depth_observation import wait_for_renderer_frames
+
+        state = {"updates": 0, "steps": 0}
+
+        class _App:
+            def update(self):
+                state["updates"] += 1
+
+        class _Orch:
+            def step(self, **kwargs):
+                state["steps"] += 1
+
+            def wait_until_complete(self):
+                pass
+
+        class _StepFilledAnnotator:
+            def get_data(self):
+                if state["steps"] >= 2:
+                    return np.ones((4, 4, 4), dtype=np.uint8)
+                return np.zeros((0,), dtype=np.uint8)  # empty despite updates
+
+        wait_for_renderer_frames(
+            _App(), _Orch(), [("rgb", _StepFilledAnnotator())], timeout_s=5.0
+        )
+        assert state["steps"] >= 2
+        assert state["updates"] >= state["steps"]  # update+step per iteration
+
+    def test_blocking_step_overshoot_reports_timeout_not_success(self):
+        """A step that blocks past the deadline (cold compile) must report
+        timeout even if buffers happened to fill during it."""
+        from simready.simulation.depth_observation import wait_for_renderer_frames
+
+        class _App:
+            def update(self):
+                pass
+
+        class _BlockingStepOrchestrator:
+            def step(self, **kwargs):
+                time.sleep(0.25)
+
+            def wait_until_complete(self):
+                pass
+
+        class _Ready:
+            def get_data(self):
+                return np.ones((4, 4, 4), dtype=np.uint8)
+
+        with pytest.raises(ValueError, match="produced no frames"):
+            wait_for_renderer_frames(
+                _App(),
+                _BlockingStepOrchestrator(),
+                [("rgb", _Ready())],
+                timeout_s=0.05,
+            )

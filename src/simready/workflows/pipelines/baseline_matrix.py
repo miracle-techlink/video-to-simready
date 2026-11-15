@@ -16,6 +16,13 @@ Candidate modes (set per member via ``candidate_source``):
   scoring is attempted. Quality is reported as ``NOT_EVALUATED`` with an
   explicit reason.
 
+Render execution backend: ``evaluation.render_backend`` in the matrix config
+selects ``"local"`` (native Isaac python on this host, e.g. the GPUFree
+server's Isaac 6.2) or ``"docker"`` (default; the simready-isaac-core
+container). The choice is validated and frozen into the plan at planning
+time and the executor launches exactly the frozen backend - there is no
+environment-based fallback.
+
 The matrix never ranks members or promotes a backend. Aggregation across
 scenes is delegated to ``benchmark_suite.py``; this module remains
 single-scene.
@@ -234,9 +241,22 @@ def plan_matrix(
     video = reference(resolve_ref(raw.get("video"), config.parent))
     evaluation = fields(
         raw.get("evaluation", {}),
-        {"protocol", "camera_evidence", "timeout_s", "render_contract"},
+        {
+            "protocol",
+            "camera_evidence",
+            "timeout_s",
+            "render_contract",
+            "render_backend",
+        },
         "evaluation",
     )
+    render_backend = evaluation.get("render_backend", "docker")
+    if render_backend not in {"local", "docker"}:
+        raise ValueError(
+            "evaluation.render_backend must be local or docker "
+            f"(got {render_backend!r}); it is frozen into the plan, and no "
+            "environment-based fallback is performed"
+        )
     timeout = evaluation.get("timeout_s", 300)
     if number(timeout, "evaluation timeout") <= 0:
         raise ValueError("Evaluation timeout must be positive")
@@ -341,6 +361,7 @@ def plan_matrix(
             "protocol": protocol_ref,
             "camera_evidence": camera_ref,
             "timeout_s": timeout,
+            "render_backend": render_backend,
             "protocol_is_caller_supplied": True,
             "render_contract": (
                 render_contract["declaration"] if render_contract else None
@@ -455,15 +476,121 @@ def _quality(member, manifest, directory, reconstruction):
 # ---------------------------------------------------------------------------
 
 
-def render_auto_observations(contract, view_set_path, reconstruction, directory):
+def _copy_bundle_file(source, relative, directory, claimed, label):
+    """Copy one bundle input; distinct sources at one destination collide.
+
+    Re-copying the identical source is idempotent (shared dependencies), but
+    two different files claiming the same bundle path is a fatal layout
+    conflict: silently overwriting one would break the other's frozen hash.
+    """
+    dest_rel = Path(relative)
+    if dest_rel.is_absolute() or ".." in dest_rel.parts:
+        raise ValueError(
+            f"{label} bundle path must stay inside the bundle: {relative!r}"
+        )
+    source = Path(source).resolve()
+    key = dest_rel.as_posix()
+    previous = claimed.get(key)
+    if previous is not None:
+        if previous != source:
+            raise ValueError(
+                f"Bundle path collision at {key!r}: {label} {source} "
+                f"conflicts with already-bundled {previous}"
+            )
+        return directory / dest_rel
+    destination = directory / dest_rel
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, destination)
+    claimed[key] = source
+    return destination
+
+
+def _scene_local_dependencies(scene_src):
+    """List the scene's local USD dependencies relative to its own directory.
+
+    Covers BOTH layers and non-layer assets (textures, PLY meshes, ...) from
+    ComputeAllDependencies. Returns None when pxr is unavailable (the
+    worker's unresolved-layer check still guards rendering in that case).
+    Unresolved references are fatal here so a broken scene never enters a
+    bundle that looks contract-valid. Absolute or out-of-tree references are
+    rejected too: the original file still being reachable at its absolute
+    location must never excuse a bundle that is not actually self-contained;
+    re-freeze the scene with in-tree relative references instead.
+    """
+    try:
+        from pxr import UsdUtils
+    except ImportError:
+        return None
+    layers, assets, unresolved = UsdUtils.ComputeAllDependencies(str(scene_src))
+    if unresolved:
+        raise ValueError(
+            f"Scene dependencies unresolved before bundling: {list(unresolved)[:8]}"
+        )
+    root = scene_src.parent.resolve()
+    dependencies = []
+    seen = set()
+    for entry in (*layers, *assets):
+        raw = getattr(entry, "realPath", None) or str(
+            getattr(entry, "assetPath", entry)
+        )
+        if not raw:
+            continue
+        resolved = Path(raw).resolve()
+        if not resolved.is_file() or resolved == scene_src.resolve():
+            continue
+        if resolved in seen:
+            continue
+        try:
+            relative = resolved.relative_to(root)
+        except ValueError as error:
+            raise ValueError(
+                f"Scene references {resolved} outside its own directory "
+                "(absolute or out-of-tree reference); the bundle cannot stay "
+                "self-contained without editing the frozen scene - re-freeze "
+                "the scene with in-tree relative references"
+            ) from error
+        seen.add(resolved)
+        dependencies.append((resolved, relative))
+    return dependencies
+
+
+def _verify_bundle_scene_resolves(scene_dest):
+    """Re-check the bundled scene: moved USD references must still resolve."""
+    try:
+        from pxr import UsdUtils
+    except ImportError:
+        return None
+    _, _, unresolved = UsdUtils.ComputeAllDependencies(str(scene_dest))
+    if unresolved:
+        raise ValueError(
+            f"Bundled scene dependencies unresolved: {list(unresolved)[:8]}"
+        )
+    return True
+
+
+def render_auto_observations(
+    contract,
+    view_set_path,
+    reconstruction,
+    directory,
+    *,
+    backend="docker",
+    gpu="0",
+    timeout_s=7200,
+):
     """Materialize a render request bound to the actual reconstruction and render.
 
     The planning-time contract froze the renderer identity, scene, view set
     and scoring inputs; the reconstruction binding is added here, after the
     artifact exists. Everything is written into ``directory`` as a
-    self-contained, contract-valid bundle (scene/view set/reconstruction
-    copies plus ``render_request.json``), so no frozen input is rewritten and
-    no future file is read. Returns the render request and receipt paths.
+    self-contained, contract-valid bundle: the scene (with its local USD
+    dependencies, structure-preserved), the view set, every camera-evidence
+    file the frozen view set references, the reconstruction and
+    ``render_request.json``. No frozen input is rewritten and no future file
+    is read. The render output is a SIBLING of the bundle (never inside it):
+    the launcher mounts the bundle read-only as the asset scope and the
+    output writable, which requires the two trees not to nest. Returns the
+    render request and receipt paths.
     """
     from simready.core.benchmark_contract import validate_render_request
     from simready.simulation.benchmark_observation import (
@@ -473,11 +600,36 @@ def render_auto_observations(contract, view_set_path, reconstruction, directory)
 
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
+    claimed = {}
     scene_src = Path(contract["scene"]["path"])
     ply_src = Path(reconstruction["ply_path"])
-    shutil.copy2(scene_src, directory / scene_src.name)
-    shutil.copy2(view_set_path, directory / "view_set.json")
-    shutil.copy2(ply_src, directory / ply_src.name)
+    view_set_src = Path(view_set_path)
+    _copy_bundle_file(scene_src, scene_src.name, directory, claimed, "scene")
+    _copy_bundle_file(view_set_src, "view_set.json", directory, claimed, "view set")
+    _copy_bundle_file(ply_src, ply_src.name, directory, claimed, "reconstruction")
+    # The frozen view set requires each view's camera-evidence file relative
+    # to its own root; the bundle root becomes that root after the copy, so
+    # the referenced evidence must be carried at the same relative path.
+    view_set = read_json(view_set_src)
+    for view in view_set["views"]:
+        evidence = Path(view["camera_evidence"]["path"])
+        _copy_bundle_file(
+            view_set_src.parent / evidence,
+            evidence,
+            directory,
+            claimed,
+            "view camera evidence",
+        )
+    # USD references must survive the move: copy local dependencies (layers
+    # AND assets) in place, never rewriting the scene, then re-verify the
+    # bundled copy resolves and carries identical bytes.
+    for dep_src, dep_rel in _scene_local_dependencies(scene_src) or ():
+        bundled = _copy_bundle_file(
+            dep_src, dep_rel, directory, claimed, "scene dependency"
+        )
+        if digest(bundled) != digest(dep_src):
+            raise ValueError(f"Scene dependency copy differs: {dep_rel}")
+    _verify_bundle_scene_resolves(directory / scene_src.name)
     request = {
         "schema_version": 1,
         "kind": "render_request",
@@ -494,11 +646,12 @@ def render_auto_observations(contract, view_set_path, reconstruction, directory)
     request_path = directory / "render_request.json"
     write_json(request_path, request)
     validate_render_request(read_json(request_path), request_path.parent)
+    output_dir = directory.parent / "render-output"
     plan = plan_benchmark_observation(
-        request_path, directory / "view_set.json", directory / "render"
+        request_path, directory / "view_set.json", output_dir
     )
-    run_benchmark_observation(plan)
-    return request_path, directory / "render" / "receipt.json"
+    run_benchmark_observation(plan, backend=backend, gpu=gpu, timeout_s=timeout_s)
+    return request_path, output_dir / "receipt.json"
 
 
 def _quality_auto(member, manifest, directory, reconstruction):
@@ -528,11 +681,15 @@ def _quality_auto(member, manifest, directory, reconstruction):
     ensure_unchanged(manifest["frozen_references"])
 
     directory.mkdir(parents=True, exist_ok=True)
+    # The backend is a FROZEN plan value: workers launch exactly what was
+    # planned (docker default for compatibility), never an environment-based
+    # fallback.
     request_path, receipt_path = render_auto_observations(
         contract,
         Path(contract["view_set"]["path"]),
         reconstruction,
         directory / "render-input",
+        backend=evaluation.get("render_backend", "docker"),
     )
     if not receipt_path.is_file():
         raise ValueError("Benchmark renderer produced no receipt")
@@ -626,7 +783,7 @@ def _artifact_refs(member, quality, evaluation_dir):
         candidate = evaluation_dir / "candidate" / "candidate.json"
         if candidate.is_file():
             refs["candidate"] = str(candidate)
-        render_receipt = evaluation_dir / "render-input" / "render" / "receipt.json"
+        render_receipt = evaluation_dir / "render-output" / "receipt.json"
         if render_receipt.is_file():
             refs["render_receipt"] = str(render_receipt)
     scorecard = quality.get("scorecard") if isinstance(quality, dict) else None
@@ -777,7 +934,15 @@ def execute_matrix(manifest):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog=(
+            "The render execution backend is not a CLI option: it is the "
+            "frozen evaluation.render_backend matrix-config field "
+            '("local"/"docker", default "docker"). The CLI never rewrites '
+            "frozen plans; edit the config and re-plan."
+        ),
+    )
     parser.add_argument("--matrix", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     scope = parser.add_mutually_exclusive_group()

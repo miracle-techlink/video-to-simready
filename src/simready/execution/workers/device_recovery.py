@@ -70,13 +70,11 @@ def recover_device(uuid, *, directory, lock_dir=DEFAULT_LOCK_DIR, timeout_s=15):
             )
             confirmed = cleanup["status"] == "REMOVED"
             known_id = reason.get("cleanup", {}).get("container_id")
+            known_id_valid = isinstance(known_id, str) and re.fullmatch(
+                r"[a-f0-9]{64}", known_id
+            )
             remaining = deadline - time.monotonic()
-            if (
-                not confirmed
-                and isinstance(known_id, str)
-                and re.fullmatch(r"[a-f0-9]{64}", known_id)
-                and remaining > 0
-            ):
+            if not confirmed and known_id_valid and remaining > 0:
                 listing = directory / "known-id.stdout.log"
                 result = run_process(
                     [
@@ -97,6 +95,59 @@ def recover_device(uuid, *, directory, lock_dir=DEFAULT_LOCK_DIR, timeout_s=15):
                 )
                 confirmed = result.returncode == 0 and not listing.read_text().strip()
                 report["known_id_absent"] = confirmed
+            # With a VERIFIED container id, the name listing must never
+            # authorize release: the container may still exist under a
+            # different name (renamed), so an empty name listing cannot
+            # prove it gone, and a failed ID query proves nothing either.
+            # The name fallback is only sound for name-only quarantines
+            # (container died under --rm before its ID was verified): there
+            # a daemon-successful listing with no exact name match means the
+            # container does not exist now. A failed listing (daemon down,
+            # permission, timeout) proves nothing and keeps the quarantine;
+            # an inspect rc=1 alone never did. Exact string compare on
+            # {{.Names}} - neighbors sharing the prefix must not read as
+            # present, and an existing same-name container with a foreign
+            # ownership label stays NEEDS_REVIEW (removal already refused).
+            if not confirmed and not known_id_valid:
+                remaining = deadline - time.monotonic()
+            if not confirmed and not known_id_valid and remaining > 0:
+                listing = directory / "name-absence.stdout.log"
+                result = run_process(
+                    [
+                        "docker",
+                        "container",
+                        "ls",
+                        "--all",
+                        "--no-trunc",
+                        "--filter",
+                        f"name=^/{name}$",
+                        "--format",
+                        "{{.Names}}",
+                    ],
+                    cwd=None,
+                    timeout=remaining,
+                    stdout=listing,
+                    stderr=directory / "name-absence.stderr.log",
+                )
+                if result.returncode == 0:
+                    listed = {
+                        line.strip().lstrip("/")
+                        for line in listing.read_text().splitlines()
+                        if line.strip()
+                    }
+                    still_present = name in listed
+                    confirmed = not still_present
+                    report["name_absence_verified"] = confirmed
+                    if still_present:
+                        report["name_absence_reason"] = (
+                            "Container name still present in the daemon listing"
+                        )
+                else:
+                    report["name_absence_verified"] = False
+                    report["name_absence_reason"] = (
+                        "Docker listing failed (daemon unreachable, permission "
+                        "or timeout); absence unconfirmed"
+                    )
             if confirmed:
                 handle.seek(0)
                 handle.truncate()
