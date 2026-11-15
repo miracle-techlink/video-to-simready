@@ -88,10 +88,18 @@ def label_fallback() -> None:
 
 
 def metric_cases(tmp: Path) -> None:
-    (tmp / "gt.json").write_text(json.dumps({"obj": 2.0}))
-    (tmp / "perfect.json").write_text(json.dumps({"obj_s0": [2.0, 2.0]}))
+    # evaluate_mass_predictions refuses to overwrite; write into a fresh subdir
+    # each run and keep inputs identical to the recorded evidence.
+    run = tmp / "metric_repro"
+    if run.exists():
+        for stale in run.glob("*.json"):
+            stale.unlink()
+    else:
+        run.mkdir(parents=True)
+    (run / "gt.json").write_text(json.dumps({"obj": 2.0}))
+    (run / "perfect.json").write_text(json.dumps({"obj_s0": [2.0, 2.0]}))
     good = evaluate_mass_predictions(
-        tmp / "perfect.json", tmp / "gt.json", ["obj_s0"], tmp / "good.json"
+        run / "perfect.json", run / "gt.json", ["obj_s0"], run / "good.json"
     )
     check(
         "perfect prediction scores zero error and passes thresholds",
@@ -99,9 +107,12 @@ def metric_cases(tmp: Path) -> None:
         and good["metrics"]["MnRE"] == 1.0
         and good["physical_validation_passed"],
     )
-    (tmp / "bad.json").write_text(json.dumps({"obj_s0": [4.0, 6.0]}))
+    (run / "bad.json").write_text(json.dumps({"obj_s0": [4.0, 6.0]}))
     bad = evaluate_mass_predictions(
-        tmp / "bad.json", tmp / "gt.json", ["obj_s0", "obj_s1"], tmp / "bad_out.json"
+        run / "bad.json",
+        run / "gt.json",
+        ["obj_s0", "obj_s1"],
+        run / "bad_out.json",
     )
     check(
         "missing scene keeps coverage honest and fails thresholds",
