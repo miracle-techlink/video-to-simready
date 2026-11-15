@@ -14,7 +14,7 @@ main 保留 `artifact`、`command`、`aholo` 重建后端。Aholo 云端模型�
 ## 开发进度（每日更新）
 
 - 日期口径：Asia/Shanghai（北京时间）；提交/合并时间由 GitHub 记录换算。
-- 最近核对：2026-11-15 15:06 CST，远端 main `deaf7bca8d070b45e5030e1d8ea2bdd6ac3e5ec7`。
+- 最近核对：2026-11-15 15:14 CST，远端 main `b25ec48ccb59bbe585c7f7fbf7664371c7dabf71`。
 - 记录起点为公开仓库创建日（2026-11-10 15:38 CST），非任何云服务投产日期。无记录的日期仅表示“未找到可核验记录”，不推断当天无人工作。
 
 | 日期 | 新增 / 合入 | 已验证功能与范围（限制） |
@@ -26,12 +26,13 @@ main 保留 `artifact`、`command`、`aholo` 重建后端。Aholo 云端模型�
 | 11-14 | [#14](https://github.com/miracle-techlink/video-to-simready/pull/14) 模块化流水线/阶段恢复/baseline 矩阵/merge-gate/main 绑定 SHA 安装包；[#15](https://github.com/miracle-techlink/video-to-simready/pull/15) 仓库清理；[#16](https://github.com/miracle-techlink/video-to-simready/pull/16) main 核心/专用演示分离；[#17](https://github.com/miracle-techlink/video-to-simready/pull/17)–[#19](https://github.com/miracle-techlink/video-to-simready/pull/19) 工程指南/示例整合/runtime 子层 | CI 侧 merge-gate 与 main 安装包绑定 SHA 交付上线（CPU 范围）；仓库外服务器完成真实门店视频 12 关键帧全新重建→USD→Isaac 巡览（`d65696a`，111,365 高斯点，21:12 CST `checked_at`）——尺度未验证、物性未评估、任务未验证、未修复的诊断性巡览。摘要见 [docs/progress/2026-11-14-acceptance.json](docs/progress/2026-11-14-acceptance.json)（历史验收记录，非当日 main 整链通过；其中 v6 静态修复预览完成日期未单独核实，另见今日“复核历史记录”） |
 | 11-15 | 详见下节 | 详见下节 |
 
-### 2026-11-15（今日，截至 15:06 CST）
+### 2026-11-15（今日，截至 15:14 CST）
 
-**已合入 main**（HEAD [`deaf7bc`](https://github.com/miracle-techlink/video-to-simready/commit/deaf7bca8d070b45e5030e1d8ea2bdd6ac3e5ec7)）：
+**已合入 main**（HEAD [`b25ec48`](https://github.com/miracle-techlink/video-to-simready/commit/b25ec48ccb59bbe585c7f7fbf7664371c7dabf71)）：
 
 - [#21](https://github.com/miracle-techlink/video-to-simready/pull/21) benchmark 基础设施（14:52 合入，`1aa5233`）：benchmark 输入合同、批量观测 worker 代码、candidate 独立评分、矩阵/suite 编排、CPU 合同测试、真实模型 opt-in 测试骨架。main CI（[run 43687418431](https://github.com/miracle-techlink/video-to-simready/actions/runs/43687418431)）：Python 3.10/3.12 CPU 回归、contract、package、merge-gate 全部通过——**CPU/打包范围**，不含真实模型/GPU。
 - [#20](https://github.com/miracle-techlink/video-to-simready/pull/20) 外部开发者指南（15:02 合入）。
+- [#22](https://github.com/miracle-techlink/video-to-simready/pull/22) CI 证据与验收指南（15:10 合入，`b25ec48`）：CI 失败证据保留（JUnit+artifact）、CI scope 报告（real_model/gpu 显式 NOT_RUN）、wheel smoke 安装加固、[手动验收指南](docs/ACCEPTANCE_RUNBOOK.md)。main push CI（[run 43688764667](https://github.com/miracle-techlink/video-to-simready/actions/runs/43688764667)）通过；GPU 的 Actions 自动通道**仍未接入**（仓库无 secrets/runner，本 PR 不改变这一点）。
 
 **已验证记录（绑定运行版本）**：
 
@@ -40,17 +41,16 @@ main 保留 `artifact`、`command`、`aholo` 重建后端。Aholo 云端模型�
 
 **已提交待验 / 未合入**：
 
-- [#22](https://github.com/miracle-techlink/video-to-simready/pull/22)（draft，CI 全绿待审）：CI 失败证据保留（JUnit+artifact）、CI scope 报告（real_model/gpu 显式 NOT_RUN）、wheel smoke 安装加固、手动验收指南（随该 PR 引入 `docs/ACCEPTANCE_RUNBOOK.md`）。GPU 的 Actions 自动通道**未接入**（仓库无 secrets/runner）。
 - benchmark GPU 入口真实复验发现启动/相对路径/prim 名/退出码问题、auto 输入包缺相机证据；修复补丁（`c4bed58` 等）已提交在 fix 分支但**未经正式复验，不算 GPU 通过**。历史基线 `8870f88` 上的 `depth_observation` 双视角成功仅为独立诊断，既不证明新入口、也不适用新补丁。
 
-**开发中（无通过声明）**：真实图片 CLIP 新特征编码（`feat/real-image-feature-encoding`）与真实物性测量 GT 仍缺失（NeRF2Physics 公式与缓存特征回归已测）；`test/real-data-segmentation-acceptance`：COCO val2017 5 张人工标注小样本真实推理中，未出最终准确率；地瓜分支 `feat/digua-hackathon-drone-substation`：合成变电站 + PhysX 四旋翼 PID/预设航点录制实现中，无成片、无训练与自主导航结论。
+**开发中（无通过声明）**：真实图片 CLIP 新特征编码（`feat/real-image-feature-encoding`）与真实物性测量 GT 仍缺失（NeRF2Physics 公式与缓存特征回归已测）；`test/real-data-segmentation-acceptance`：COCO val2017 真实小样本评估与复核中；地瓜分支 `feat/digua-hackathon-drone-substation`：合成变电站 + PhysX 四旋翼 PID/预设航点录制实现中，无成片、无训练与自主导航结论。
 
 **复核历史记录**：11-14 摘要 JSON 中的 v6 静态修复预览（`REPAIRED_PREVIEW_REVIEWED`）经今日复核确认记录存在；其 delivery/summary/quality-review JSON 均无完成/审核绝对时间字段，完成日期未单独核实（`date_status: not_recorded`），不计为 11-14 当日完成项。
 
 ### 下一步计划 / To-do
 
 - [ ] **P0** 固定同一最终 SHA 打通 production 真实 GPU 多视角→candidate→独立评分→suite 全链。完成标准：进程退出码、输入/输出 hash、失败注入与恢复证据齐备并归档；必要修复合入 main。
-- [ ] **P0** 合入 #22（CI 证据/手动验收指南）并保持 main 检查通过。完成标准：PR 合并且 main CI 绿；GPU Actions 自动通道仍明确未接入。
+- [x] **P0** 合入 #22（CI 证据/手动验收指南）并保持 main 检查通过。完成标准：PR 合并且 main CI 绿；GPU Actions 自动通道仍明确未接入。（已达成：15:10 合入 `b25ec48`，main push CI [run 43688764667](https://github.com/miracle-techlink/video-to-simready/actions/runs/43688764667) 通过；GPU 自动通道未接入状态未变）
 - [ ] **P1** 真实图片 CLIP 新特征编码与缓存回放明确区分，并按真实输入/模型/协议给出真实 GT 分割评估报告。完成标准：报告含数据/模型 hash 与逐项指标，不以合成特征冒充。
 - [ ] **P1** 地瓜黑客松首版：合成变电站四旋翼物理闭环悬停/航点跟踪 + 真实轨迹/碰撞检查 + 20–30s 视频。完成标准：物理闭环指标与录制成片；预设航点/脚本相机不写成已训练自主导航。
 - [ ] **P1/P2** 以带尺度/位姿/几何参考的真实小数据集（TUM/ScanNet++ 等按许可）验收重建与碰撞空间；未知区域保持未知。完成标准：独立参考下的误差报告；静态导航不以家具精确质量为先决条件。
