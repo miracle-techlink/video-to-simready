@@ -554,3 +554,297 @@ def test_auto_mode_scene_mismatch_fails_closed(prepared, tmp_path, monkeypatch):
     assert "scene" in row["error"]["message"].lower()
     assert row["quality"]["status"] == "NOT_EVALUATED"
     assert report["status"] == "COMPLETED_WITH_FAILURES"
+
+
+# ---------------------------------------------------------------------------
+# render_auto_observations bundle completeness (F-GPU-5)
+# ---------------------------------------------------------------------------
+
+
+def _bundle_view_set(root, *, evidence_dir="manifests"):
+    """View set whose camera evidence lives in a subdirectory, like real runs."""
+    evidence = root / evidence_dir
+    evidence.mkdir(parents=True, exist_ok=True)
+    views = []
+    for vid in ("view-a", "view-b"):
+        cam = evidence / f"cam-{vid}.json"
+        write_json(cam, {"camera": vid})
+        views.append(
+            {
+                "view_id": vid,
+                "resolution": {"width": 16, "height": 16},
+                "intrinsics": [[16, 0, 8], [0, 16, 8], [0, 0, 1]],
+                "camera_to_world": [
+                    [1, 0, 0, 0],
+                    [0, 1, 0, 0],
+                    [0, 0, 1, 0],
+                    [0, 0, 0, 1],
+                ],
+                "distortion": {"model": "none", "coefficients": []},
+                "preprocessing": "none",
+                "camera_evidence": {
+                    "path": f"{evidence_dir}/cam-{vid}.json",
+                    "sha256": digest(cam),
+                },
+            }
+        )
+    view_set = root / "view_set.json"
+    write_json(
+        view_set,
+        {
+            "schema_version": 1,
+            "kind": "view_set",
+            "view_set_id": "vs-bundle",
+            "coordinate_frame": "world",
+            "unit": "m",
+            "views": views,
+        },
+    )
+    return view_set
+
+
+def _bundle_contract(scene):
+    return {
+        "scene": {"path": str(scene), "sha256": digest(scene)},
+        "renderer": {
+            "name": "isaac-sim",
+            "version": "6.1.0",
+            "code_sha256": "a" * 64,
+            "environment": {"image": "fixture", "python": "3.12"},
+        },
+        "image_settings": {"width": 16, "height": 16, "mode": "rgb"},
+        "lighting": {"policy": "scene_default", "exposure": 0.0},
+        "seed": 7,
+        "budget": {"max_wall_seconds": 60},
+    }
+
+
+def _fake_gpu_execution(render_dir):
+    """Replace only the GPU execution boundary; planning stays production."""
+
+    def _run(plan):
+        render = Path(plan["output_dir"])
+        render.mkdir(parents=True, exist_ok=True)
+        views = []
+        for view in plan["views"]:
+            image = render / f"{view['view_id']}.rgb.png"
+            Image.new("RGB", (16, 16), color=(4, 5, 6)).save(image)
+            views.append(
+                {
+                    "view_id": view["view_id"],
+                    "width": 16,
+                    "height": 16,
+                    "rgb_file": image.name,
+                    "rgb_sha256": digest(image),
+                    "depth_file": None,
+                    "depth_sha256": None,
+                }
+            )
+        write_json(
+            render / "receipt.json",
+            {
+                "synthetic_fixture": False,
+                "worker": "gpu-boundary-stub",
+                "scene_id": "bundle-test",
+                "seed": 7,
+                "want_depth": False,
+                "render_settings": {"width": 16, "height": 16, "mode": "rgb"},
+                "views": views,
+                "completed": len(views),
+                "expected": len(views),
+                "duration_seconds": 0.0,
+            },
+        )
+        return {"returncode": 0}
+
+    return _run
+
+
+class TestRenderAutoBundle:
+    """The auto-render bundle must satisfy the frozen contracts it carries."""
+
+    def test_real_view_set_passes_production_planning(self, tmp_path, monkeypatch):
+        """Evidence in subdirs must be bundled so plan_benchmark_observation
+        succeeds on real contract inputs (the live F-GPU-5 failure)."""
+        scene = tmp_path / "scene.usda"
+        scene.write_text("#usda 1.0\n")
+        ply = tmp_path / "recon.ply"
+        ply.write_text("ply\n")
+        view_set = _bundle_view_set(tmp_path)
+        reconstruction = {"ply_path": str(ply), "ply_sha256": digest(ply)}
+        monkeypatch.setattr(
+            "simready.simulation.benchmark_observation.run_benchmark_observation",
+            _fake_gpu_execution(tmp_path / "render"),
+        )
+        request_path, receipt_path = matrix.render_auto_observations(
+            _bundle_contract(scene),
+            view_set,
+            reconstruction,
+            tmp_path / "render-input",
+        )
+        bundle = tmp_path / "render-input"
+        # Production planning (validate_render_request + validate_view_set +
+        # plan_benchmark_observation) ran against the bundle and passed.
+        assert request_path.is_file()
+        assert receipt_path.is_file()
+        for vid in ("view-a", "view-b"):
+            bundled = bundle / "manifests" / f"cam-{vid}.json"
+            assert bundled.is_file()
+            assert digest(bundled) == digest(tmp_path / "manifests" / f"cam-{vid}.json")
+        # The frozen view set bytes are carried unchanged.
+        assert digest(bundle / "view_set.json") == digest(view_set)
+        request = read_json(request_path)
+        assert request["view_set"]["sha256"] == digest(view_set)
+
+    def test_tampered_evidence_rejected_by_planning(self, tmp_path, monkeypatch):
+        """Evidence hash drift must fail validation, not be waved through."""
+        scene = tmp_path / "scene.usda"
+        scene.write_text("#usda 1.0\n")
+        ply = tmp_path / "recon.ply"
+        ply.write_text("ply\n")
+        view_set = _bundle_view_set(tmp_path)
+        (tmp_path / "manifests" / "cam-view-a.json").write_text(
+            '{"camera": "tampered"}'
+        )
+        reconstruction = {"ply_path": str(ply), "ply_sha256": digest(ply)}
+        monkeypatch.setattr(
+            "simready.simulation.benchmark_observation.run_benchmark_observation",
+            _fake_gpu_execution(tmp_path / "render"),
+        )
+        from simready.core.benchmark_contract import ContractError
+
+        with pytest.raises(ContractError, match="camera evidence"):
+            matrix.render_auto_observations(
+                _bundle_contract(scene),
+                view_set,
+                reconstruction,
+                tmp_path / "render-input",
+            )
+
+    def test_missing_evidence_rejected(self, tmp_path, monkeypatch):
+        """A view set whose evidence file is absent cannot be bundled."""
+        scene = tmp_path / "scene.usda"
+        scene.write_text("#usda 1.0\n")
+        ply = tmp_path / "recon.ply"
+        ply.write_text("ply\n")
+        view_set = _bundle_view_set(tmp_path)
+        (tmp_path / "manifests" / "cam-view-b.json").unlink()
+        reconstruction = {"ply_path": str(ply), "ply_sha256": digest(ply)}
+        monkeypatch.setattr(
+            "simready.simulation.benchmark_observation.run_benchmark_observation",
+            _fake_gpu_execution(tmp_path / "render"),
+        )
+        with pytest.raises(FileNotFoundError):
+            matrix.render_auto_observations(
+                _bundle_contract(scene),
+                view_set,
+                reconstruction,
+                tmp_path / "render-input",
+            )
+
+    def test_scene_usd_dependencies_carried_and_resolve(self, tmp_path, monkeypatch):
+        """A sublayer reference must still resolve inside the bundle."""
+        pytest.importorskip("pxr")
+        scene_dir = tmp_path / "scene"
+        scene_dir.mkdir()
+        sublayer = scene_dir / "extra_layer.usda"
+        sublayer.write_text('#usda 1.0\n\ndef Scope "Extra"\n{\n}\n')
+        scene = scene_dir / "scene.usda"
+        scene.write_text(
+            "#usda 1.0\n"
+            "(\n    subLayers = [@./extra_layer.usda@]\n"
+            ')\n\ndef Scope "Root"\n{\n}\n'
+        )
+        ply = tmp_path / "recon.ply"
+        ply.write_text("ply\n")
+        view_set = _bundle_view_set(tmp_path)
+        reconstruction = {"ply_path": str(ply), "ply_sha256": digest(ply)}
+        monkeypatch.setattr(
+            "simready.simulation.benchmark_observation.run_benchmark_observation",
+            _fake_gpu_execution(tmp_path / "render"),
+        )
+        matrix.render_auto_observations(
+            _bundle_contract(scene),
+            view_set,
+            reconstruction,
+            tmp_path / "render-input",
+        )
+        bundle = tmp_path / "render-input"
+        assert (bundle / "scene.usda").is_file()
+        assert (bundle / "extra_layer.usda").is_file()
+        from pxr import UsdUtils
+
+        _, _, unresolved = UsdUtils.ComputeAllDependencies(str(bundle / "scene.usda"))
+        assert not unresolved
+
+    def test_unresolved_scene_reference_rejected_before_bundling(
+        self, tmp_path, monkeypatch
+    ):
+        """A scene with dangling references must not enter a valid-looking bundle."""
+        pytest.importorskip("pxr")
+        scene = tmp_path / "scene.usda"
+        scene.write_text(
+            "#usda 1.0\n"
+            "(\n    subLayers = [@./missing_layer.usda@]\n"
+            ')\n\ndef Scope "Root"\n{\n}\n'
+        )
+        ply = tmp_path / "recon.ply"
+        ply.write_text("ply\n")
+        view_set = _bundle_view_set(tmp_path)
+        reconstruction = {"ply_path": str(ply), "ply_sha256": digest(ply)}
+        monkeypatch.setattr(
+            "simready.simulation.benchmark_observation.run_benchmark_observation",
+            _fake_gpu_execution(tmp_path / "render"),
+        )
+        with pytest.raises(ValueError, match="unresolved"):
+            matrix.render_auto_observations(
+                _bundle_contract(scene),
+                view_set,
+                reconstruction,
+                tmp_path / "render-input",
+            )
+
+    def test_bundle_name_collision_is_fatal(self, tmp_path, monkeypatch):
+        """Two different files claiming one bundle path must not overwrite."""
+        pytest.importorskip("pxr")
+        scene_dir = tmp_path / "scene"
+        scene_dir.mkdir()
+        (scene_dir / "dep").mkdir()
+        # Scene USD dependency at bundle-relative path dep/extra.usda.
+        (scene_dir / "dep" / "extra.usda").write_text(
+            '#usda 1.0\n\ndef Scope "Extra"\n{\n}\n'
+        )
+        scene = scene_dir / "scene.usda"
+        scene.write_text(
+            "#usda 1.0\n"
+            "(\n    subLayers = [@./dep/extra.usda@]\n"
+            ')\n\ndef Scope "Root"\n{\n}\n'
+        )
+        ply = tmp_path / "recon.ply"
+        ply.write_text("ply\n")
+        view_set = _bundle_view_set(tmp_path)
+        # Camera evidence claims the SAME bundle-relative path (dep/extra.usda)
+        # as the scene dependency but with different bytes: fatal, never a
+        # silent overwrite of either frozen input.
+        conflicting = tmp_path / "dep" / "extra.usda"
+        conflicting.parent.mkdir(exist_ok=True)
+        conflicting.write_text('{"camera": "different-bytes-than-scene-dep"}')
+        manifest = read_json(view_set)
+        manifest["views"] = manifest["views"][:1]
+        manifest["views"][0]["camera_evidence"] = {
+            "path": "dep/extra.usda",
+            "sha256": digest(conflicting),
+        }
+        write_json(view_set, manifest)
+        reconstruction = {"ply_path": str(ply), "ply_sha256": digest(ply)}
+        monkeypatch.setattr(
+            "simready.simulation.benchmark_observation.run_benchmark_observation",
+            _fake_gpu_execution(tmp_path / "render"),
+        )
+        with pytest.raises(ValueError, match="collision"):
+            matrix.render_auto_observations(
+                _bundle_contract(scene),
+                view_set,
+                reconstruction,
+                tmp_path / "render-input",
+            )

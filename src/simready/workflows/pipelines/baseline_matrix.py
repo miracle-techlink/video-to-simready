@@ -455,15 +455,97 @@ def _quality(member, manifest, directory, reconstruction):
 # ---------------------------------------------------------------------------
 
 
+def _copy_bundle_file(source, relative, directory, claimed, label):
+    """Copy one bundle input; distinct sources at one destination collide.
+
+    Re-copying the identical source is idempotent (shared dependencies), but
+    two different files claiming the same bundle path is a fatal layout
+    conflict: silently overwriting one would break the other's frozen hash.
+    """
+    dest_rel = Path(relative)
+    if dest_rel.is_absolute() or ".." in dest_rel.parts:
+        raise ValueError(
+            f"{label} bundle path must stay inside the bundle: {relative!r}"
+        )
+    source = Path(source).resolve()
+    key = dest_rel.as_posix()
+    previous = claimed.get(key)
+    if previous is not None:
+        if previous != source:
+            raise ValueError(
+                f"Bundle path collision at {key!r}: {label} {source} "
+                f"conflicts with already-bundled {previous}"
+            )
+        return directory / dest_rel
+    destination = directory / dest_rel
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, destination)
+    claimed[key] = source
+    return destination
+
+
+def _scene_local_dependencies(scene_src):
+    """List the scene's local USD dependencies relative to its own directory.
+
+    Returns None when pxr is unavailable (the worker's unresolved-layer check
+    still guards rendering in that case). Unresolved references are fatal
+    here so a broken scene never enters a bundle that looks contract-valid.
+    """
+    try:
+        from pxr import UsdUtils
+    except ImportError:
+        return None
+    layers, _, unresolved = UsdUtils.ComputeAllDependencies(str(scene_src))
+    if unresolved:
+        raise ValueError(
+            f"Scene dependencies unresolved before bundling: {list(unresolved)[:8]}"
+        )
+    root = scene_src.parent.resolve()
+    dependencies = []
+    for layer in layers:
+        path = Path(layer.realPath)
+        if not path.is_file():
+            continue
+        resolved = path.resolve()
+        if resolved == scene_src.resolve():
+            continue
+        try:
+            relative = resolved.relative_to(root)
+        except ValueError as error:
+            raise ValueError(
+                f"Scene references {resolved} outside its own directory; "
+                "the bundle cannot stay self-contained without editing the "
+                "frozen scene"
+            ) from error
+        dependencies.append((resolved, relative))
+    return dependencies
+
+
+def _verify_bundle_scene_resolves(scene_dest):
+    """Re-check the bundled scene: moved USD references must still resolve."""
+    try:
+        from pxr import UsdUtils
+    except ImportError:
+        return None
+    _, _, unresolved = UsdUtils.ComputeAllDependencies(str(scene_dest))
+    if unresolved:
+        raise ValueError(
+            f"Bundled scene dependencies unresolved: {list(unresolved)[:8]}"
+        )
+    return True
+
+
 def render_auto_observations(contract, view_set_path, reconstruction, directory):
     """Materialize a render request bound to the actual reconstruction and render.
 
     The planning-time contract froze the renderer identity, scene, view set
     and scoring inputs; the reconstruction binding is added here, after the
     artifact exists. Everything is written into ``directory`` as a
-    self-contained, contract-valid bundle (scene/view set/reconstruction
-    copies plus ``render_request.json``), so no frozen input is rewritten and
-    no future file is read. Returns the render request and receipt paths.
+    self-contained, contract-valid bundle: the scene (with its local USD
+    dependencies, structure-preserved), the view set, every camera-evidence
+    file the frozen view set references, the reconstruction and
+    ``render_request.json``. No frozen input is rewritten and no future file
+    is read. Returns the render request and receipt paths.
     """
     from simready.core.benchmark_contract import validate_render_request
     from simready.simulation.benchmark_observation import (
@@ -473,11 +555,31 @@ def render_auto_observations(contract, view_set_path, reconstruction, directory)
 
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
+    claimed = {}
     scene_src = Path(contract["scene"]["path"])
     ply_src = Path(reconstruction["ply_path"])
-    shutil.copy2(scene_src, directory / scene_src.name)
-    shutil.copy2(view_set_path, directory / "view_set.json")
-    shutil.copy2(ply_src, directory / ply_src.name)
+    view_set_src = Path(view_set_path)
+    _copy_bundle_file(scene_src, scene_src.name, directory, claimed, "scene")
+    _copy_bundle_file(view_set_src, "view_set.json", directory, claimed, "view set")
+    _copy_bundle_file(ply_src, ply_src.name, directory, claimed, "reconstruction")
+    # The frozen view set requires each view's camera-evidence file relative
+    # to its own root; the bundle root becomes that root after the copy, so
+    # the referenced evidence must be carried at the same relative path.
+    view_set = read_json(view_set_src)
+    for view in view_set["views"]:
+        evidence = Path(view["camera_evidence"]["path"])
+        _copy_bundle_file(
+            view_set_src.parent / evidence,
+            evidence,
+            directory,
+            claimed,
+            "view camera evidence",
+        )
+    # USD references must survive the move: copy local dependencies in place
+    # (never rewriting the scene) and re-verify resolution on the copy.
+    for dep_src, dep_rel in _scene_local_dependencies(scene_src) or ():
+        _copy_bundle_file(dep_src, dep_rel, directory, claimed, "scene dependency")
+    _verify_bundle_scene_resolves(directory / scene_src.name)
     request = {
         "schema_version": 1,
         "kind": "render_request",
