@@ -26,9 +26,13 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     )
 
 
-def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
     if not config.getoption("--run-real-model"):
-        skip = pytest.mark.skip(reason="needs --run-real-model (real model weights required)")
+        skip = pytest.mark.skip(
+            reason="needs --run-real-model (real model weights required)"
+        )
         for item in items:
             if "real_model" in item.keywords:
                 item.add_marker(skip)

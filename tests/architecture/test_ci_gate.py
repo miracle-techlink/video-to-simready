@@ -10,7 +10,10 @@ from tests.paths import REPOSITORY_ROOT
 
 
 def success():
-    return {name: {"result": "success"} for name in ("static", "test", "cpu-contract-tests", "package")}
+    return {
+        name: {"result": "success"}
+        for name in ("static", "test", "cpu-contract-tests", "package")
+    }
 
 
 def test_all_required_checks_must_pass():

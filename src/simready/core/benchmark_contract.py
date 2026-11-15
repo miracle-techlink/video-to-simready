@@ -92,9 +92,16 @@ def _matrix(value, shape, label):
 
 
 def _versioned(value, kind, fields_allowed, fields_required):
-    _fields(value, fields_allowed | {"schema_version", "kind"},
-            fields_required | {"schema_version", "kind"}, kind)
-    if type(value["schema_version"]) is not int or value["schema_version"] != SCHEMA_VERSION:
+    _fields(
+        value,
+        fields_allowed | {"schema_version", "kind"},
+        fields_required | {"schema_version", "kind"},
+        kind,
+    )
+    if (
+        type(value["schema_version"]) is not int
+        or value["schema_version"] != SCHEMA_VERSION
+    ):
         _error(f"{kind} requires schema_version {SCHEMA_VERSION}")
     if value["kind"] != kind:
         _error(f"{kind} kind mismatch: {value['kind']!r}")
@@ -126,8 +133,12 @@ def _string_list(value, label):
 
 def _check_split_access(split, label):
     """A claimed split only becomes audited with restricted inputs and evidence."""
-    _fields(split, {"status", "access_evidence", "fitted_components"},
-            {"status", "access_evidence", "fitted_components"}, label)
+    _fields(
+        split,
+        {"status", "access_evidence", "fitted_components"},
+        {"status", "access_evidence", "fitted_components"},
+        label,
+    )
     if split["status"] not in {"claimed", "audited"}:
         _error(f"{label} status must be 'claimed' or 'audited'")
     _string_list(split["fitted_components"], f"{label} fitted_components")
@@ -136,8 +147,12 @@ def _check_split_access(split, label):
         _error(f"{label} unknown fitted components: {sorted(unknown)}")
     evidence = split["access_evidence"]
     if evidence is not None:
-        _fields(evidence, {"restricted_inputs", "access_log"},
-                {"restricted_inputs", "access_log"}, f"{label} access_evidence")
+        _fields(
+            evidence,
+            {"restricted_inputs", "access_log"},
+            {"restricted_inputs", "access_log"},
+            f"{label} access_evidence",
+        )
         _string_list(evidence["restricted_inputs"], f"{label} restricted_inputs")
         _string(evidence["access_log"], f"{label} access_log")
     if split["status"] == "audited" and evidence is None:
@@ -149,15 +164,28 @@ def _check_split_access(split, label):
 
 def validate_dataset(manifest, root):
     """Validate a frozen dataset manifest: identities, splits and hashed media."""
-    _versioned(manifest, "dataset",
-               {"dataset_id", "version", "source", "license", "scenes",
-                "split_access", "capture_evidence"},
-               {"dataset_id", "version", "source", "license", "scenes",
-                "split_access"})
+    _versioned(
+        manifest,
+        "dataset",
+        {
+            "dataset_id",
+            "version",
+            "source",
+            "license",
+            "scenes",
+            "split_access",
+            "capture_evidence",
+        },
+        {"dataset_id", "version", "source", "license", "scenes", "split_access"},
+    )
     _string(manifest["dataset_id"], "dataset_id")
     _string(manifest["version"], "dataset version")
-    _fields(manifest["source"], {"type", "reference"}, {"type", "reference"},
-            "dataset source")
+    _fields(
+        manifest["source"],
+        {"type", "reference"},
+        {"type", "reference"},
+        "dataset source",
+    )
     _string(manifest["source"]["type"], "dataset source type")
     _string(manifest["source"]["reference"], "dataset source reference")
     _string(manifest["license"], "dataset license")
@@ -179,8 +207,9 @@ def validate_dataset(manifest, root):
         if not isinstance(scene["captures"], list) or not scene["captures"]:
             _error("scene captures must be a nonempty list")
         for capture in scene["captures"]:
-            _fields(capture, {"capture_id", "frames"},
-                    {"capture_id", "frames"}, "capture")
+            _fields(
+                capture, {"capture_id", "frames"}, {"capture_id", "frames"}, "capture"
+            )
             _string(capture["capture_id"], "capture_id")
             if capture["capture_id"] in capture_ids:
                 _error(f"Duplicate capture id: {capture['capture_id']!r}")
@@ -188,10 +217,12 @@ def validate_dataset(manifest, root):
             if not isinstance(capture["frames"], list) or not capture["frames"]:
                 _error("capture frames must be a nonempty list")
             for frame in capture["frames"]:
-                _fields(frame,
-                        {"frame_id", "split", "image", "depth",
-                         "derived_from_capture"},
-                        {"frame_id", "split", "image"}, "frame")
+                _fields(
+                    frame,
+                    {"frame_id", "split", "image", "depth", "derived_from_capture"},
+                    {"frame_id", "split", "image"},
+                    "frame",
+                )
                 _string(frame["frame_id"], "frame_id")
                 if frame["frame_id"] in frame_ids:
                     _error(f"Duplicate frame id: {frame['frame_id']!r}")
@@ -212,8 +243,10 @@ def validate_dataset(manifest, root):
                             f"Frame {frame['frame_id']!r} derived from unknown "
                             f"capture {derived!r}"
                         )
-    counts = {name: sum(1 for split in frame_split.values() if split == name)
-              for name in SPLITS}
+    counts = {
+        name: sum(1 for split in frame_split.values() if split == name)
+        for name in SPLITS
+    }
     if not counts["fit"]:
         _error("dataset needs a nonempty fit split")
     if not counts["development"] and not counts["sealed"]:
@@ -227,9 +260,12 @@ def validate_dataset(manifest, root):
 
 def validate_view_set(manifest, root):
     """Validate the shared target views every model must render."""
-    _versioned(manifest, "view_set",
-               {"view_set_id", "coordinate_frame", "unit", "views"},
-               {"view_set_id", "coordinate_frame", "unit", "views"})
+    _versioned(
+        manifest,
+        "view_set",
+        {"view_set_id", "coordinate_frame", "unit", "views"},
+        {"view_set_id", "coordinate_frame", "unit", "views"},
+    )
     _string(manifest["view_set_id"], "view_set_id")
     _string(manifest["coordinate_frame"], "coordinate_frame")
     if manifest["unit"] not in {"m", "cm", "mm", "arbitrary"}:
@@ -240,31 +276,57 @@ def validate_view_set(manifest, root):
         _error("view_set views must be a nonempty list")
     seen = set()
     for view in views:
-        _fields(view,
-                {"view_id", "resolution", "intrinsics", "camera_to_world",
-                 "distortion", "preprocessing", "camera_evidence"},
-                {"view_id", "resolution", "intrinsics", "camera_to_world",
-                 "distortion", "preprocessing", "camera_evidence"},
-                "view")
+        _fields(
+            view,
+            {
+                "view_id",
+                "resolution",
+                "intrinsics",
+                "camera_to_world",
+                "distortion",
+                "preprocessing",
+                "camera_evidence",
+            },
+            {
+                "view_id",
+                "resolution",
+                "intrinsics",
+                "camera_to_world",
+                "distortion",
+                "preprocessing",
+                "camera_evidence",
+            },
+            "view",
+        )
         _string(view["view_id"], "view_id")
         if view["view_id"] in seen:
             _error(f"Duplicate view id: {view['view_id']!r}")
         seen.add(view["view_id"])
-        _fields(view["resolution"], {"width", "height"}, {"width", "height"},
-                "view resolution")
+        _fields(
+            view["resolution"],
+            {"width", "height"},
+            {"width", "height"},
+            "view resolution",
+        )
         for axis in ("width", "height"):
             value = view["resolution"][axis]
             if type(value) is not int or value <= 0 or value > 16384:
                 _error(f"view resolution {axis} must be an integer in 1..16384")
         _matrix(view["intrinsics"], (3, 3), "view intrinsics")
         _matrix(view["camera_to_world"], (4, 4), "view camera_to_world")
-        _fields(view["distortion"], {"model", "coefficients"},
-                {"model", "coefficients"}, "view distortion")
+        _fields(
+            view["distortion"],
+            {"model", "coefficients"},
+            {"model", "coefficients"},
+            "view distortion",
+        )
         if view["distortion"]["model"] not in {"none", "opencv"}:
             _error(f"Unknown distortion model: {view['distortion']['model']!r}")
-        _vector(view["distortion"]["coefficients"],
-                len(view["distortion"]["coefficients"]),
-                "view distortion coefficients")
+        _vector(
+            view["distortion"]["coefficients"],
+            len(view["distortion"]["coefficients"]),
+            "view distortion coefficients",
+        )
         if view["distortion"]["model"] == "none" and view["distortion"]["coefficients"]:
             _error("Distortion 'none' must not carry coefficients")
         if view["distortion"]["model"] == "opencv" and not (
@@ -278,30 +340,62 @@ def validate_view_set(manifest, root):
 
 def validate_render_request(manifest, root):
     """Freeze renderer identity, views, image settings, lighting, seed and budget."""
-    _versioned(manifest, "render_request",
-               {"request_id", "scene", "reconstruction", "view_set", "renderer",
-                "image_settings", "lighting", "seed", "budget"},
-               {"request_id", "scene", "reconstruction", "view_set", "renderer",
-                "image_settings", "lighting", "seed", "budget"})
+    _versioned(
+        manifest,
+        "render_request",
+        {
+            "request_id",
+            "scene",
+            "reconstruction",
+            "view_set",
+            "renderer",
+            "image_settings",
+            "lighting",
+            "seed",
+            "budget",
+        },
+        {
+            "request_id",
+            "scene",
+            "reconstruction",
+            "view_set",
+            "renderer",
+            "image_settings",
+            "lighting",
+            "seed",
+            "budget",
+        },
+    )
     _string(manifest["request_id"], "request_id")
     root = Path(root)
     _file_ref(manifest["scene"], root, "scene")
     _file_ref(manifest["reconstruction"], root, "reconstruction")
     _file_ref(manifest["view_set"], root, "view_set manifest")
     renderer = manifest["renderer"]
-    _fields(renderer,
-            {"name", "version", "code_sha256", "environment"},
-            {"name", "version", "code_sha256", "environment"}, "renderer")
+    _fields(
+        renderer,
+        {"name", "version", "code_sha256", "environment"},
+        {"name", "version", "code_sha256", "environment"},
+        "renderer",
+    )
     _string(renderer["name"], "renderer name")
     _string(renderer["version"], "renderer version")
     _sha256(renderer["code_sha256"], "renderer code_sha256")
-    _fields(renderer["environment"], {"image", "python"},
-            {"image", "python"}, "renderer environment")
+    _fields(
+        renderer["environment"],
+        {"image", "python"},
+        {"image", "python"},
+        "renderer environment",
+    )
     _string(renderer["environment"]["image"], "renderer environment image")
     _string(renderer["environment"]["python"], "renderer environment python")
     settings = manifest["image_settings"]
-    _fields(settings, {"width", "height", "mode", "background"},
-            {"width", "height", "mode"}, "image_settings")
+    _fields(
+        settings,
+        {"width", "height", "mode", "background"},
+        {"width", "height", "mode"},
+        "image_settings",
+    )
     for axis in ("width", "height"):
         value = settings[axis]
         if type(value) is not int or value <= 0 or value > 16384:
@@ -311,8 +405,9 @@ def validate_render_request(manifest, root):
     if settings.get("background") is not None:
         _vector(settings["background"], 3, "image_settings background")
     lighting = manifest["lighting"]
-    _fields(lighting, {"policy", "exposure", "seed"},
-            {"policy", "exposure"}, "lighting")
+    _fields(
+        lighting, {"policy", "exposure", "seed"}, {"policy", "exposure"}, "lighting"
+    )
     if lighting["policy"] not in {"frozen", "scene_default"}:
         _error(f"Unknown lighting policy: {lighting['policy']!r}")
     _finite_number(lighting["exposure"], "lighting exposure")
@@ -325,10 +420,13 @@ def validate_render_request(manifest, root):
     if type(manifest["seed"]) is not int or manifest["seed"] < 0:
         _error("render_request seed must be a nonnegative integer")
     budget = manifest["budget"]
-    _fields(budget, {"max_wall_seconds", "max_memory_bytes", "max_gpu_seconds"},
-            {"max_wall_seconds"}, "budget")
-    _finite_number(budget["max_wall_seconds"], "budget max_wall_seconds",
-                   minimum=0)
+    _fields(
+        budget,
+        {"max_wall_seconds", "max_memory_bytes", "max_gpu_seconds"},
+        {"max_wall_seconds"},
+        "budget",
+    )
+    _finite_number(budget["max_wall_seconds"], "budget max_wall_seconds", minimum=0)
     for name in ("max_memory_bytes", "max_gpu_seconds"):
         if budget.get(name) is not None:
             _finite_number(budget[name], f"budget {name}", minimum=0)
@@ -337,23 +435,41 @@ def validate_render_request(manifest, root):
 
 def validate_evaluation_request(manifest, root):
     """Freeze the scoring protocol; thresholds stay separate from render config."""
-    _versioned(manifest, "evaluation_request",
-               {"request_id", "protocol", "candidate_source", "scorer",
-                "deadline", "render_request"},
-               {"request_id", "protocol", "candidate_source", "scorer",
-                "deadline", "render_request"})
+    _versioned(
+        manifest,
+        "evaluation_request",
+        {
+            "request_id",
+            "protocol",
+            "candidate_source",
+            "scorer",
+            "deadline",
+            "render_request",
+        },
+        {
+            "request_id",
+            "protocol",
+            "candidate_source",
+            "scorer",
+            "deadline",
+            "render_request",
+        },
+    )
     _string(manifest["request_id"], "request_id")
     root = Path(root)
     _file_ref(manifest["render_request"], root, "render_request manifest")
     protocol = manifest["protocol"]
-    _fields(protocol, {"name", "version", "sha256"},
-            {"name", "version", "sha256"}, "protocol")
+    _fields(
+        protocol,
+        {"name", "version", "sha256"},
+        {"name", "version", "sha256"},
+        "protocol",
+    )
     _string(protocol["name"], "protocol name")
     _string(protocol["version"], "protocol version")
     _sha256(protocol["sha256"], "protocol sha256")
     candidate = manifest["candidate_source"]
-    _fields(candidate, {"mode", "reference"},
-            {"mode"}, "candidate_source")
+    _fields(candidate, {"mode", "reference"}, {"mode"}, "candidate_source")
     if candidate["mode"] not in CANDIDATE_SOURCE_MODES:
         _error(f"Unknown candidate source mode: {candidate['mode']!r}")
     if candidate["mode"] == "external":
@@ -363,8 +479,12 @@ def validate_evaluation_request(manifest, root):
     elif candidate.get("reference") is not None:
         _error("Auto candidate source must not bind a pre-existing reference")
     scorer = manifest["scorer"]
-    _fields(scorer, {"name", "version", "code_sha256"},
-            {"name", "version", "code_sha256"}, "scorer")
+    _fields(
+        scorer,
+        {"name", "version", "code_sha256"},
+        {"name", "version", "code_sha256"},
+        "scorer",
+    )
     _string(scorer["name"], "scorer name")
     _string(scorer["version"], "scorer version")
     _sha256(scorer["code_sha256"], "scorer code_sha256")
@@ -383,6 +503,9 @@ _VALIDATORS = {
 def validate_manifest(manifest, root):
     """Dispatch on the manifest kind; unknown kinds are rejected."""
     if not isinstance(manifest, dict) or manifest.get("kind") not in _VALIDATORS:
-        _error(f"Unknown benchmark manifest kind: {manifest.get('kind')!r}"
-               if isinstance(manifest, dict) else "Manifest must be an object")
+        _error(
+            f"Unknown benchmark manifest kind: {manifest.get('kind')!r}"
+            if isinstance(manifest, dict)
+            else "Manifest must be an object"
+        )
     return _VALIDATORS[manifest["kind"]](manifest, root)

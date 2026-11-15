@@ -19,7 +19,6 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-import tempfile
 import venv
 from pathlib import Path
 
@@ -52,7 +51,9 @@ def _make_venv(root: Path) -> Path:
     return root / "bin" / "python"
 
 
-def _run(python: Path, code: str, cwd: Path, timeout: int = 60) -> subprocess.CompletedProcess:
+def _run(
+    python: Path, code: str, cwd: Path, timeout: int = 60
+) -> subprocess.CompletedProcess:
     return subprocess.run(
         [str(python), "-I", "-c", code],
         cwd=cwd,

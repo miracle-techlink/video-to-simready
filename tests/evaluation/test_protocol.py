@@ -2,8 +2,8 @@
 
 import pytest
 
+from simready.core.artifacts import digest
 from simready.evaluation.protocol import validate_candidate, validate_protocol
-from simready.core.artifacts import digest, write_json
 from tests.fixtures.scene_candidate import make_scene_candidate
 
 
@@ -118,7 +118,11 @@ class TestValidateProtocol:
     def test_coverage_check_required(self, tmp_path):
         """All declared observations must have a coverage check requiring 100%."""
         _, _, protocol, _, _ = make_scene_candidate(tmp_path)
-        protocol["checks"] = [c for c in protocol["checks"] if c["metric"] != "coverage.observation_fraction"]
+        protocol["checks"] = [
+            c
+            for c in protocol["checks"]
+            if c["metric"] != "coverage.observation_fraction"
+        ]
         with pytest.raises(ValueError, match="[Mm]issing required tracks|[Cc]overage"):
             validate_protocol(protocol)
 
@@ -136,10 +140,12 @@ class TestValidateCandidate:
 
     def test_undeclared_view_rejected(self, tmp_path):
         p, c, protocol, candidate, _ = make_scene_candidate(tmp_path)
-        candidate["views"].append({
-            "view_id": "undeclared-view",
-            "rgb": {"path": "x.png", "sha256": "a" * 64},
-        })
+        candidate["views"].append(
+            {
+                "view_id": "undeclared-view",
+                "rgb": {"path": "x.png", "sha256": "a" * 64},
+            }
+        )
         with pytest.raises(ValueError, match="[Uu]ndeclared"):
             validate_candidate(candidate, digest(p), protocol)
 
@@ -176,8 +182,10 @@ class TestThresholdRenderSeparation:
         assert any("limit" in c for c in protocol["checks"])
 
     def test_render_request_has_no_thresholds(self):
-        from simready.core.benchmark_contract import validate_render_request
         import inspect
+
+        from simready.core.benchmark_contract import validate_render_request
+
         source = inspect.getsource(validate_render_request)
         # The render request validator should not reference thresholds or limits
         # in the context of quality checks.

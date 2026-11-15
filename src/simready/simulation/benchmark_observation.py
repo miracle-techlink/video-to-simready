@@ -6,26 +6,22 @@ Only accepts frozen render requests validated by core/benchmark_contract.py.
 
 from __future__ import annotations
 
-import math
 import time
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from simready.core.artifacts import digest, object_digest, read_json, write_json
+from simready.core.artifacts import digest, read_json, write_json
 from simready.core.benchmark_contract import (
-    ContractError,
     validate_render_request,
     validate_view_set,
 )
-from simready.geometry.cameras import rigid_inverse
 from simready.simulation.depth_observation import (
     _capture_single_view,
     _create_observation_camera,
     _validate_capture_result,
     calibration_to_usd_camera,
-    normalize_camera_z,
 )
 
 
@@ -190,10 +186,9 @@ def _worker_main(argv=None) -> int:
         import omni.kit.app
         import omni.timeline
         import omni.usd
-        from PIL import Image
-        from pxr import Gf, UsdGeom, UsdLux, UsdUtils
-
         from isaacsim import SimulationApp
+        from PIL import Image
+        from pxr import UsdGeom, UsdLux
 
         app = SimulationApp(
             {"headless": True, "limit_cpu_threads": 4, "fast_shutdown": True},
@@ -226,9 +221,7 @@ def _worker_main(argv=None) -> int:
 
         lighting = render_request["lighting"]
         if lighting["policy"] == "frozen":
-            existing_lights = [
-                p for p in stage.Traverse() if p.HasAPI(UsdLux.LightAPI)
-            ]
+            existing_lights = [p for p in stage.Traverse() if p.HasAPI(UsdLux.LightAPI)]
             if not existing_lights:
                 light = UsdLux.DomeLight.Define(stage, "/SimReadyBenchmark/Light")
                 light.CreateIntensityAttr(300.0)
@@ -236,8 +229,8 @@ def _worker_main(argv=None) -> int:
 
         for view in view_set["views"]:
             view_id = view["view_id"]
-            intrinsics = np.asarray(view["intrinsics"], dtype=float)
-            c2w = np.asarray(view["camera_to_world"], dtype=float)
+            np.asarray(view["intrinsics"], dtype=float)
+            np.asarray(view["camera_to_world"], dtype=float)
 
             calibration = {
                 "schema_version": 1,

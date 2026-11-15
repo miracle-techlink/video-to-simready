@@ -20,7 +20,9 @@ import sys
 import time
 from pathlib import Path
 
-SYNTHETIC_BANNER = "Synthetic fake worker. Result does NOT count as real rendering or real scoring."
+SYNTHETIC_BANNER = (
+    "Synthetic fake worker. Result does NOT count as real rendering or real scoring."
+)
 
 
 def _check_outcome(check: dict, candidate: dict) -> dict:
@@ -64,7 +66,7 @@ def run_score_request(candidate: dict, protocol: dict, out_dir: Path) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
 
-    checks = [ _check_outcome(c, candidate) for c in protocol.get("checks", []) ]
+    checks = [_check_outcome(c, candidate) for c in protocol.get("checks", [])]
     failed_required = [c for c in checks if c["required"] and not c["passed"]]
 
     if not checks:
@@ -85,14 +87,26 @@ def run_score_request(candidate: dict, protocol: dict, out_dir: Path) -> dict:
         checks=checks,
         duration_seconds=round(time.monotonic() - started, 6),
     )
-    (out_dir / "scorecard.json").write_text(json.dumps(scorecard, indent=2, sort_keys=True))
+    (out_dir / "scorecard.json").write_text(
+        json.dumps(scorecard, indent=2, sort_keys=True)
+    )
     return scorecard
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=SYNTHETIC_BANNER)
-    parser.add_argument("--candidate", type=Path, required=True, help="Candidate JSON (placeholder schema)")
-    parser.add_argument("--protocol", type=Path, required=True, help="Protocol JSON (placeholder schema)")
+    parser.add_argument(
+        "--candidate",
+        type=Path,
+        required=True,
+        help="Candidate JSON (placeholder schema)",
+    )
+    parser.add_argument(
+        "--protocol",
+        type=Path,
+        required=True,
+        help="Protocol JSON (placeholder schema)",
+    )
     parser.add_argument("--out", type=Path, required=True, help="Output directory")
     args = parser.parse_args(argv)
 
@@ -101,7 +115,11 @@ def main(argv: list[str] | None = None) -> int:
     scorecard = run_score_request(candidate, protocol, args.out)
     print(
         json.dumps(
-            {"synthetic_fixture": True, "verdict": scorecard["verdict"], "checks": len(scorecard["checks"])}
+            {
+                "synthetic_fixture": True,
+                "verdict": scorecard["verdict"],
+                "checks": len(scorecard["checks"]),
+            }
         ),
         flush=True,
     )

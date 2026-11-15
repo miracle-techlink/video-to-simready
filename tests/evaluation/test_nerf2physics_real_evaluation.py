@@ -97,8 +97,7 @@ def _run_evaluation(eval_bundle, prediction_key: str, output_path: Path):
     files = eval_bundle
     scene_ids = read_json(files["scene_ids"])
     assert isinstance(scene_ids, list) and len(scene_ids) >= MIN_SCENE_COUNT, (
-        f"cross-scene evaluation needs >= {MIN_SCENE_COUNT} scenes, "
-        f"got {scene_ids!r}"
+        f"cross-scene evaluation needs >= {MIN_SCENE_COUNT} scenes, got {scene_ids!r}"
     )
     return evaluate_mass_predictions(
         files[prediction_key],
@@ -161,7 +160,9 @@ def test_physical_validation_passes_on_in_threshold_predictions(eval_bundle, tmp
     )
 
 
-def test_physical_validation_fails_on_out_of_threshold_predictions(eval_bundle, tmp_path):
+def test_physical_validation_fails_on_out_of_threshold_predictions(
+    eval_bundle, tmp_path
+):
     report = _run_evaluation(eval_bundle, "predictions_fail", tmp_path / "fail.json")
     expected = _expected_physical_validation(report["metrics"])
     assert expected is False, (

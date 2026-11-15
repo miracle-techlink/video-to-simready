@@ -22,9 +22,7 @@ class TestVisiblePointPixels:
     def test_single_point_projects_to_center(self):
         c2w, intrinsics = self._camera_and_intrinsics()
         points = np.array([[0, 0, 5]], dtype=float)  # 5m in front
-        indices, px, py = visible_point_pixels(
-            points, c2w, intrinsics, (100, 100)
-        )
+        indices, px, py = visible_point_pixels(points, c2w, intrinsics, (100, 100))
         assert len(indices) == 1
         assert abs(px[0] - 50) <= 1
         assert abs(py[0] - 50) <= 1
@@ -32,20 +30,24 @@ class TestVisiblePointPixels:
     def test_behind_camera_culled(self):
         c2w, intrinsics = self._camera_and_intrinsics()
         points = np.array([[0, 0, -5]], dtype=float)  # Behind camera
-        indices, px, py = visible_point_pixels(
-            points, c2w, intrinsics, (100, 100)
-        )
+        indices, px, py = visible_point_pixels(points, c2w, intrinsics, (100, 100))
         assert len(indices) == 0
 
     def test_occluded_point_culled(self):
         """A closer point at the same pixel occludes a farther point."""
         c2w, intrinsics = self._camera_and_intrinsics()
-        points = np.array([
-            [0, 0, 5],   # Near
-            [0.01, 0.01, 10],  # Far, projects to same pixel
-        ], dtype=float)
+        points = np.array(
+            [
+                [0, 0, 5],  # Near
+                [0.01, 0.01, 10],  # Far, projects to same pixel
+            ],
+            dtype=float,
+        )
         indices, px, py = visible_point_pixels(
-            points, c2w, intrinsics, (100, 100),
+            points,
+            c2w,
+            intrinsics,
+            (100, 100),
             relative_depth_tolerance=0.0,
         )
         assert len(indices) == 1
@@ -54,26 +56,20 @@ class TestVisiblePointPixels:
     def test_out_of_frame_culled(self):
         c2w, intrinsics = self._camera_and_intrinsics()
         points = np.array([[100, 0, 5]], dtype=float)  # Way to the right
-        indices, px, py = visible_point_pixels(
-            points, c2w, intrinsics, (100, 100)
-        )
+        indices, px, py = visible_point_pixels(points, c2w, intrinsics, (100, 100))
         assert len(indices) == 0
 
     def test_invalid_intrinsics_rejected(self):
         c2w = np.eye(4)
         bad_intrinsics = np.array([[0, 0, 50], [0, 100, 50], [0, 0, 1]], dtype=float)
         with pytest.raises(ValueError, match="pinhole"):
-            visible_point_pixels(
-                np.array([[0, 0, 5]]), c2w, bad_intrinsics, (100, 100)
-            )
+            visible_point_pixels(np.array([[0, 0, 5]]), c2w, bad_intrinsics, (100, 100))
 
     def test_skewed_intrinsics_rejected(self):
         c2w = np.eye(4)
         skewed = np.array([[100, 5, 50], [0, 100, 50], [0, 0, 1]], dtype=float)
         with pytest.raises(ValueError, match="pinhole"):
-            visible_point_pixels(
-                np.array([[0, 0, 5]]), c2w, skewed, (100, 100)
-            )
+            visible_point_pixels(np.array([[0, 0, 5]]), c2w, skewed, (100, 100))
 
     def test_empty_points(self):
         c2w, intrinsics = self._camera_and_intrinsics()
@@ -85,9 +81,7 @@ class TestVisiblePointPixels:
     def test_pixel_limit_enforced(self):
         c2w, intrinsics = self._camera_and_intrinsics()
         with pytest.raises(ValueError, match="megapixel"):
-            visible_point_pixels(
-                np.array([[0, 0, 5]]), c2w, intrinsics, (5000, 5000)
-            )
+            visible_point_pixels(np.array([[0, 0, 5]]), c2w, intrinsics, (5000, 5000))
 
 
 class TestBuildSemanticSpec:
@@ -95,10 +89,6 @@ class TestBuildSemanticSpec:
 
     def _make_fixtures(self, tmp_path, with_depth=False):
         """Create PLY, segmentation manifest, and calibration for testing."""
-        from simready.assets.appearance.gaussian_asset import (
-            decode_vertices,
-            read_ply,
-        )
 
         # Create a simple PLY with a few points.
         rng = np.random.default_rng(42)
@@ -226,7 +216,10 @@ class TestBuildSemanticSpec:
         manifest["instances"][0]["score"] = 0.1
         write_json(manifest_path, manifest)
         result = build_semantic_spec(
-            ply, manifest_path, cal_path, tmp_path / "out",
+            ply,
+            manifest_path,
+            cal_path,
+            tmp_path / "out",
             min_score=0.25,
         )
         assert len(result["accepted"]) == 0
@@ -239,12 +232,14 @@ class TestBuildSemanticSpec:
         manifest["instances"][0]["category"] = "unknown_thing"
         write_json(manifest_path, manifest)
         result = build_semantic_spec(
-            ply, manifest_path, cal_path, tmp_path / "out",
+            ply,
+            manifest_path,
+            cal_path,
+            tmp_path / "out",
         )
         assert len(result["accepted"]) == 0
         assert any(
-            s["reason"] == "category_has_no_physical_prior"
-            for s in result["skipped"]
+            s["reason"] == "category_has_no_physical_prior" for s in result["skipped"]
         )
 
     def test_output_must_not_exist(self, tmp_path):
@@ -265,4 +260,5 @@ class TestBuildSemanticSpec:
 
 def read_json(path):
     from simready.core.artifacts import read_json as _read
+
     return _read(path)

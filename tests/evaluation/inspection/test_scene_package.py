@@ -14,12 +14,15 @@ class TestInspectScene:
     """
 
     def test_missing_scene_raises(self, tmp_path):
-        with pytest.raises(Exception):
+        from pxr import Tf
+
+        with pytest.raises(Tf.ErrorException):
             inspect_scene(tmp_path)
 
     def test_output_must_not_exist(self, tmp_path):
         """The CLI entry point refuses to overwrite an existing output."""
         from simready.evaluation.inspection.scene_package import main
+
         out = tmp_path / "existing.json"
         out.write_text("{}")
         with pytest.raises(FileExistsError):

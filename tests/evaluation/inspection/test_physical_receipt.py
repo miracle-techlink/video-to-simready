@@ -1,8 +1,5 @@
 """Physical receipt verification: hash binding, path safety, asset inventory."""
 
-import json
-from pathlib import Path
-
 import pytest
 
 from simready.core.artifacts import digest, write_json
@@ -33,7 +30,9 @@ def _make_receipt(tmp_path, objects=None, status="PASS", passed=True):
             "catalog": {"sha256": digest(catalog_path)},
             "scene_spec": {"sha256": digest(spec_path)},
         },
-        "assets": [{"id": obj["id"], "status": "PASS", "passed": True} for obj in objects],
+        "assets": [
+            {"id": obj["id"], "status": "PASS", "passed": True} for obj in objects
+        ],
         "dependencies": [
             {"path": "scene.usda", "sha256": digest(scene_path)},
         ],
@@ -77,8 +76,10 @@ class TestVerifyPhysicalReceipt:
 
     def test_asset_inventory_mismatch_rejected(self, tmp_path):
         receipt, spec_path = _make_receipt(tmp_path)
-        receipt["assets"] = [{"id": "box1", "status": "PASS", "passed": True},
-                              {"id": "box2", "status": "PASS", "passed": True}]
+        receipt["assets"] = [
+            {"id": "box1", "status": "PASS", "passed": True},
+            {"id": "box2", "status": "PASS", "passed": True},
+        ]
         with pytest.raises(ValueError, match="inventory"):
             verify_physical_receipt(receipt, directory=tmp_path, scene_spec=spec_path)
 
@@ -102,10 +103,14 @@ class TestVerifyPhysicalReceipt:
 
     def test_missing_root_layer_rejected(self, tmp_path):
         receipt, spec_path = _make_receipt(tmp_path)
-        receipt["dependencies"] = [{"path": "other.usda", "sha256": digest(tmp_path / "scene.usda")}]
+        receipt["dependencies"] = [
+            {"path": "other.usda", "sha256": digest(tmp_path / "scene.usda")}
+        ]
         # Create the file so it exists but isn't scene.usda
         (tmp_path / "other.usda").write_text("#usda 1.0\n")
-        receipt["dependencies"] = [{"path": "other.usda", "sha256": digest(tmp_path / "other.usda")}]
+        receipt["dependencies"] = [
+            {"path": "other.usda", "sha256": digest(tmp_path / "other.usda")}
+        ]
         with pytest.raises(ValueError, match="root USD layer"):
             verify_physical_receipt(receipt, directory=tmp_path, scene_spec=spec_path)
 

@@ -12,8 +12,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 from tests.paths import REPOSITORY_ROOT
 
 RENDER_WORKER = REPOSITORY_ROOT / "tests/fixtures/fake_render_worker.py"
@@ -26,10 +24,7 @@ def _render_request(tmp_path: Path, views: int = 2) -> Path:
         seed=7,
         want_depth=True,
         render_settings={"backend": "fake", "spp": 1},
-        views=[
-            dict(view_id=f"v{i}", width=32, height=24)
-            for i in range(views)
-        ],
+        views=[dict(view_id=f"v{i}", width=32, height=24) for i in range(views)],
     )
     path = tmp_path / "request.json"
     path.write_text(json.dumps(payload))
@@ -42,8 +37,22 @@ def _candidate_and_protocol(tmp_path: Path):
         benchmark_id="bench-1",
         phase="development",
         checks=[
-            dict(check_id="c1", track="appearance", metric="m1", op=">=", limit=0.5, required=True),
-            dict(check_id="c2", track="coverage", metric="m2", op="<=", limit=0.5, required=False),
+            dict(
+                check_id="c1",
+                track="appearance",
+                metric="m1",
+                op=">=",
+                limit=0.5,
+                required=True,
+            ),
+            dict(
+                check_id="c2",
+                track="coverage",
+                metric="m2",
+                op="<=",
+                limit=0.5,
+                required=False,
+            ),
         ],
     )
     cand_path = tmp_path / "candidate.json"
@@ -56,8 +65,17 @@ def _candidate_and_protocol(tmp_path: Path):
 def test_render_worker_emits_receipt_with_synthetic_marker(tmp_path):
     out = tmp_path / "out"
     result = subprocess.run(
-        [sys.executable, str(RENDER_WORKER), "--request", str(_render_request(tmp_path)), "--out", str(out)],
-        capture_output=True, text=True, timeout=30,
+        [
+            sys.executable,
+            str(RENDER_WORKER),
+            "--request",
+            str(_render_request(tmp_path)),
+            "--out",
+            str(out),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     assert result.returncode == 0, result.stderr
     receipt = json.loads((out / "receipt.json").read_text())
@@ -74,12 +92,18 @@ def test_render_worker_fail_at_view_exits_nonzero_without_receipt(tmp_path):
     out = tmp_path / "out"
     result = subprocess.run(
         [
-            sys.executable, str(RENDER_WORKER),
-            "--request", str(_render_request(tmp_path)),
-            "--out", str(out),
-            "--fail-at-view", "1",
+            sys.executable,
+            str(RENDER_WORKER),
+            "--request",
+            str(_render_request(tmp_path)),
+            "--out",
+            str(out),
+            "--fail-at-view",
+            "1",
         ],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     assert result.returncode == 7
     assert not (out / "receipt.json").exists()
@@ -92,12 +116,18 @@ def test_render_worker_timeout_after_exits_124(tmp_path):
     out = tmp_path / "out"
     result = subprocess.run(
         [
-            sys.executable, str(RENDER_WORKER),
-            "--request", str(req),
-            "--out", str(out),
-            "--timeout-after", "0",
+            sys.executable,
+            str(RENDER_WORKER),
+            "--request",
+            str(req),
+            "--out",
+            str(out),
+            "--timeout-after",
+            "0",
         ],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     assert result.returncode == 124
     assert "timeout" in result.stdout
@@ -107,12 +137,17 @@ def test_render_worker_corrupt_hash_produces_zero_digest(tmp_path):
     out = tmp_path / "out"
     result = subprocess.run(
         [
-            sys.executable, str(RENDER_WORKER),
-            "--request", str(_render_request(tmp_path)),
-            "--out", str(out),
+            sys.executable,
+            str(RENDER_WORKER),
+            "--request",
+            str(_render_request(tmp_path)),
+            "--out",
+            str(out),
             "--corrupt-hash",
         ],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     assert result.returncode == 0
     receipt = json.loads((out / "receipt.json").read_text())
@@ -124,12 +159,18 @@ def test_scoring_worker_emits_verdict_with_synthetic_marker(tmp_path):
     out = tmp_path / "score"
     result = subprocess.run(
         [
-            sys.executable, str(SCORING_WORKER),
-            "--candidate", str(cand),
-            "--protocol", str(prot),
-            "--out", str(out),
+            sys.executable,
+            str(SCORING_WORKER),
+            "--candidate",
+            str(cand),
+            "--protocol",
+            str(prot),
+            "--out",
+            str(out),
         ],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     assert result.returncode == 0, result.stderr
     scorecard = json.loads((out / "scorecard.json").read_text())
@@ -147,12 +188,19 @@ def test_scoring_worker_empty_protocol_is_incomplete(tmp_path):
     out = tmp_path / "score"
     subprocess.run(
         [
-            sys.executable, str(SCORING_WORKER),
-            "--candidate", str(cand),
-            "--protocol", str(prot),
-            "--out", str(out),
+            sys.executable,
+            str(SCORING_WORKER),
+            "--candidate",
+            str(cand),
+            "--protocol",
+            str(prot),
+            "--out",
+            str(out),
         ],
-        check=True, capture_output=True, text=True, timeout=30,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     scorecard = json.loads((out / "scorecard.json").read_text())
     assert scorecard["verdict"] == "INCOMPLETE"
@@ -165,13 +213,22 @@ def test_scoring_worker_deterministic_per_candidate(tmp_path):
     for out in (out1, out2):
         subprocess.run(
             [
-                sys.executable, str(SCORING_WORKER),
-                "--candidate", str(cand),
-                "--protocol", str(prot),
-                "--out", str(out),
+                sys.executable,
+                str(SCORING_WORKER),
+                "--candidate",
+                str(cand),
+                "--protocol",
+                str(prot),
+                "--out",
+                str(out),
             ],
-            check=True, capture_output=True, text=True, timeout=30,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
     s1 = json.loads((out1 / "scorecard.json").read_text())
     s2 = json.loads((out2 / "scorecard.json").read_text())
-    assert [c["synthetic_score"] for c in s1["checks"]] == [c["synthetic_score"] for c in s2["checks"]]
+    assert [c["synthetic_score"] for c in s1["checks"]] == [
+        c["synthetic_score"] for c in s2["checks"]
+    ]

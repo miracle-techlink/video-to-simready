@@ -12,9 +12,7 @@ def _intrinsics(fx=100.0, fy=100.0, cx=32.0, cy=24.0):
 
 def test_backproject_identity_pose_returns_camera_frame_points():
     depth = np.full((48, 64), 2.0, dtype=np.float64)
-    world, linear, x, y, count = backproject_depth(
-        depth, np.eye(4), _intrinsics()
-    )
+    world, linear, x, y, count = backproject_depth(depth, np.eye(4), _intrinsics())
     assert count == 48 * 64
     # Center pixel projects to (0, 0, depth)
     center = (y == 24) & (x == 32)
@@ -30,9 +28,7 @@ def test_backproject_applies_camera_to_world_rotation():
     c2w = np.eye(4)
     # Rotate 90 degrees about Y: camera +Z becomes world +X
     c2w[:3, :3] = np.array([[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0]])
-    world, _, x, y, _ = backproject_depth(
-        depth, c2w, _intrinsics(cx=1.5, cy=1.5)
-    )
+    world, _, x, y, _ = backproject_depth(depth, c2w, _intrinsics(cx=1.5, cy=1.5))
     # camera +Z (third column of rotation) maps to world +X
     np.testing.assert_allclose(world[:, 0], 1.0, atol=1e-9)
     # camera +X (first column) maps to world -Z
@@ -60,7 +56,9 @@ def test_backproject_roundtrip_with_projection():
 def test_backproject_excludes_degenerate_depth(bad):
     depth = np.full((4, 4), 1.0, dtype=np.float64)
     depth[0, 0] = bad
-    _, linear, x, y, count = backproject_depth(depth, np.eye(4), _intrinsics(cx=1.5, cy=1.5))
+    _, linear, x, y, count = backproject_depth(
+        depth, np.eye(4), _intrinsics(cx=1.5, cy=1.5)
+    )
     assert count == 15
     assert not (linear == 0).any()
 
