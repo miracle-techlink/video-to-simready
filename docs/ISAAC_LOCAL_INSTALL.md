@@ -84,7 +84,7 @@ exts."isaacsim.asset.browser".folders = [
 
 ### 4.1 物理求解器：Newton（Steel 的载体）
 
-**先纠正一个常见误传**：截至 6.2.0-rc.14，安装内**没有独立的 Steel 求解器**（grep 到的 "steel" 全是颜色常量和名为 Steel 的 Material 假阳性）。实际情况：Steel 是 Skild AI 2026-11-09 才开源进 **Newton main** 的求解器，本 rc 内置的是 **Newton 1.6.1**；要 Steel 需升级 Newton 包线（开源线 ≥1.7）。
+**先纠正一个常见误传**：截至 6.2.0-rc.14，安装内**没有独立的 Steel 求解器**（grep 到的 "steel" 全是颜色常量和名为 Steel 的 Material 假阳性）。实际情况：Steel 是 Skild AI 2026-11-09 才开源进 **Newton main** 的求解器，本 rc 内置的是 **Newton 1.6.1**；本镜像无 Steel，如需使用需另行核对上游 Newton 的支持版本线（本次未验证）。
 
 **确切启用键名（实测验证）**：
 
@@ -102,6 +102,8 @@ exts."isaacsim.asset.browser".folders = [
 
 （GB10 历史数据 1.13M env-steps/s 量级一致；批量并行任务收益最大。）
 
+**基准限制（原证据口径，必须随数字一起引用）**：单次运行、单 seed 的吞吐 smoke；未比较 XPBD 与 TGS 的物理保真差异；不可泛化为质量或性能保证。
+
 ### 4.2 OpenUSD / usd-exchange（L40 实测）
 
 - **裸 `python.sh` 不带 pxr**；`usd-exchange==3.0.1` wheel 自带完整 pxr 运行时（USD 0.26.8），裸跑 import 即可
@@ -111,13 +113,14 @@ exts."isaacsim.asset.browser".folders = [
 
 ### 4.3 CuRobo（实测版本真相：没有 2.0）
 
-**上游不存在 CuRobo 2.x**。2026-11-14 的 main（`71ce172`）= tag **v0.9.0 + 1 commit**，包已更名 `nvidia-curobo`，`warp-lang` 成核心依赖，`[isaacsim]` extra 已删除（改用 `[cu12-torch]`）。
+**上游不存在 CuRobo 2.x**。2026-11-14 的 main（`71ce172`）= tag **v0.9.0 之后 21 个提交**（版本计数勘误见服务器证据目录 `newstack-20261115/errata.json`），包已更名 `nvidia-curobo`，`warp-lang` 成核心依赖，`[isaacsim]` extra 已删除（改用 `[cu12-torch]`）。
 
 ```bash
 # 独立 venv（不要污染 Isaac python）
 python3 -m venv venv-curobo && source venv-curobo/bin/activate
 pip install torch==2.9.1 --index-url <镜像>    # curobo main 需 torch>=2.7（dlopen libtorch_cuda_linalg.so）
 git clone https://github.com/NVlabs/curobo.git
+cd curobo && git checkout 71ce1726925adfdcc7d0d39dabec5f2d6bb71acd   # 固定到实测提交，避免安装漂移
 pip install -e ./curobo[cu12-torch] --no-build-isolation
 # JIT 需把 venv 的 nvidia lib 目录 + torch/lib 加进 LD_LIBRARY_PATH
 ```
@@ -135,7 +138,7 @@ pip install -e ./curobo[cu12-torch] --no-build-isolation
 | `DeformableMaterialView` import 错（NVIDIA 自己的 bug） | 4.5 特有；6.x 未见复现，遇到再查 |
 | `nvidia-srl-*` 系列包版本漂移 | 别手动 pip 装，让 isaacsim 自带版本保持 `0.10.0/0.14.0/0.19.1/0.7.2` 这一档 |
 | **交互式 SSH 环境变量让 kit 启动段错误**（async_engine 阶段 `_asyncio` 初始化崩溃） | **新坑（L40 实测 4 次验证）**：用 `env -i` 干净环境包装器启动；同一毒源二号表现是非干净环境下 torch/kit 触发 `_PyErr_SetLocaleString` 符号错（系统 libpython 遮蔽） |
-| pytorch.org 下载只有 0.6MB/s | 换阿里云 pytorch-wheels 镜像可到 30MB/s |
+| pytorch.org 当次下载较慢 | 改用可达镜像源（当次实测显著更快；未记录量化速率） |
 
 ## 5. 安装后验证清单
 
@@ -144,7 +147,7 @@ pip install -e ./curobo[cu12-torch] --no-build-isolation
 omni_python -m simready.simulation.environment_check
 
 # 2) 渲染冻结检测：交付前必须做首尾帧 diff
-#    （IsaacLab Camera/预制场景文件都可能静默冻结渲染，只有运行时组装才可靠）
+#    （IsaacLab Camera/预制场景文件都可能静默冻结渲染；无论加载预制场景还是运行时组装，都需首尾帧/相机变化验证）
 
 # 3) GPU 回归（本仓库 PR5 验收口径）
 #    - 一次固定两视图捕获 + 像素投影对照
@@ -158,9 +161,9 @@ omni_python -m simready.simulation.environment_check
 |---|---|---|---|---|---|
 | GPUFree 云端（L40，standalone） | 6.2.0-rc.14（含 Newton 1.6.1） | 3.12.3 | 2.3.1 | 隔离 venv 2.9.1+cu128 | ✅（kit 引导，需干净环境包装器） |
 | GB10 本机（容器） | 6.1.0 ARM64 | 3.12 | 2.x | 无 | ✅（kitonly 16.6 FPS 实测） |
-| Dockerfile 默认 | 6.2.0 GA tag（**未实测**，rc.14 证据不引作 GA 验收） | 3.12 | ≥2,<3 | 无 | ✅ |
+| Dockerfile 默认 | 6.2.0 GA tag（**未实测**，rc.14 证据不引作 GA 验收） | 3.12 | ≥2,<3 | 无 | **未验证**（rc.14 渲染证据不顶替 GA） |
 
-**新栈实测版本**（2026-11-15）：Newton 1.6.1 内置（Steel 未含，需 Newton ≥1.7 开源线）；curobo main = v0.9.0+1（`nvidia-curobo`，无 2.x）；usd-exchange 3.0.1 自带 pxr 0.26.8。
+**新栈实测版本**（2026-11-15）：Newton 1.6.1 内置（本镜像无 Steel；上游支持版本线未验证）；curobo 实测固定于 `71ce172`（tag v0.9.0 之后 21 个提交；`nvidia-curobo`，无 2.x）；usd-exchange 3.0.1 自带 pxr 0.26.8。
 
 ---
 
