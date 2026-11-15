@@ -27,16 +27,17 @@
 - [#22](https://github.com/miracle-techlink/video-to-simready/pull/22) CI 证据与验收指南（15:10 合入，`b25ec48`）：CI 失败证据保留（JUnit+artifact）、CI scope 报告（real_model/gpu 显式 NOT_RUN）、wheel smoke 安装加固、[手动验收指南](ACCEPTANCE_RUNBOOK.md)。main push CI（[run 43688764667](https://github.com/miracle-techlink/video-to-simready/actions/runs/43688764667)）通过；GPU 的 Actions 自动通道**仍未接入**（仓库无 secrets/runner，本 PR 不改变这一点）。
 - [#24](https://github.com/miracle-techlink/video-to-simready/pull/24) 真实图像 2D 区域 CLIP 编码（17:49 合入，`1917d8c`）：增加输入、权重、实现/环境与缓存内容的证据绑定；产物保持 2D 语义，不声明三维点对齐或物理验证。
 - [#26](https://github.com/miracle-techlink/video-to-simready/pull/26) COCO 小样本真实分割评测（17:54 合入，`3d27b60`）：增加冻结协议、GT 转换、预测 mask/run 证据校验与可复用 CPU 评测工具。已记录小样本指标是问题发现，不构成质量达标声明。
-- [#27](https://github.com/miracle-techlink/video-to-simready/pull/27) Isaac 实测部署指南（18:09 合入，`99c69e0`）：更新本地安装和运行说明。工厂静态三图记录仅确认资产可见性，不代表生产 GPU 全链、冷缓存或 Docker 6.1 验收。
+- [#27](https://github.com/miracle-techlink/video-to-simready/pull/27) Isaac 实测部署指南（18:09 合入，`99c69e0`）：更新本地安装和运行说明。
 
 **已验证记录（绑定运行版本）**：
 
 - PR #21 合入前候选 [`bcd89d8`](https://github.com/miracle-techlink/video-to-simready/commit/bcd89d88579dfd7e38a4d7bc2dcfd4e1466e15fc)（代码现已随 PR #21 进入 main）：其上的独立 CPU 验收为全量 1274 通过/19 跳过/0 失败，真实 CLI suite 编排与防篡改/取消反例通过。计数属于当时运行版本，不代表最新 main 各平台计数。
 - 历史基线 `8870f88` 上的真实 DINO+SAM 在门店视频 3 帧经生产入口运行成功（30 个检测实例、工件自洽核验）——执行正确性范围，无人工参考 mask，**检测/分割准确率未验证**。
+- 工厂静态三图（`d539dfc` 上的记录）：仅确认资产可见性；不代表生产 GPU 全链、冷缓存或 Docker 6.1 验收。
 
 **已提交待验 / 未合入**：
 
-- [#25](https://github.com/miracle-techlink/video-to-simready/pull/25) 正补显式 native backend 生产入口；尚未合入。其服务器 CPU 静态检查不等于 GPU 真实复验通过。benchmark GPU 入口仍有启动/相对路径/prim 名/退出码及输入包相机证据问题待在同一最终 SHA 上正式复验。历史基线 `8870f88` 的 `depth_observation` 双视角成功仅为独立诊断。
+- [#25](https://github.com/miracle-techlink/video-to-simready/pull/25) 显式 native backend 生产入口；尚未合入。`d539dfc` 上服务器 1355 通过/21 跳过，native 6.2 warm 生产 worker 双视角 + 独立评分已通过；GPU 入口启动/相对路径/prim 名/退出码与 auto 输入包相机证据等修复也在该版本落地。尚未完成的是新 native 配置贯通后同 SHA 的正式 auto suite + private 冷缓存复验；Docker 6.1 仍因 outer UID-map EPERM blocked。warm 通过不等于整链验收。历史基线 `8870f88` 的 `depth_observation` 双视角成功仅为独立诊断。
 
 **开发中（无通过声明）**：三维点特征对齐、真实物性测量 GT、较大真实数据集分割评测与质量改进仍待完成。地瓜分支 `feat/digua-hackathon-drone-substation` 后续目标为工业工厂场景与真实无人机资产的飞行演示；无成片、无训练与自主导航结论。
 
