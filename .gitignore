@@ -43,3 +43,7 @@ build/
 
 # Local generated report artifacts from full-branch checkouts.
 /docs/report/
+
+# documentation diagrams are versioned (see docs/images/)
+!docs/images/*.png
+!docs/images/*.svg
