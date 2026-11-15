@@ -39,7 +39,8 @@ from pathlib import Path
 import numpy as np
 
 from .controller import PositionAttitudeController
-from .iris_spec import IRIS_BODY_LINK, IRIS_SPEC, mixer_from_hubs, rotor_hubs
+from .iris_spec import (IRIS_BODY_LINK, IRIS_SPEC, REACTION_PATTERN,
+                      mixer_from_hubs, rotor_hubs)
 
 ASSETS_ROOT = Path("/root/gpufree-data/.simready/assets/factory-iris")
 FACTORY_USD = ASSETS_ROOT / "extracted/Usd_Explorer/Samples/Examples/2023_2/Factory/Factory.usd"
@@ -389,8 +390,14 @@ def _simulate(args: argparse.Namespace, settings: dict, app) -> None:
     for check_path in [IRIS_BODY_LINK] + [f"/World/Iris/rotor{i}" for i in range(4)]:
         if not stage.GetPrimAtPath(check_path).IsValid():
             raise RuntimeError(f"composed Iris prim missing: {check_path}")
-    body = RigidPrim(IRIS_BODY_LINK, max_contact_count=64)
     rotor_paths = [f"/World/Iris/rotor{i}" for i in range(4)]
+    # contact view: filter against the ground collider; body-only monitoring
+    # (rotor contacts not tracked — stated in the run record)
+    body = RigidPrim(
+        IRIS_BODY_LINK,
+        max_contact_count=64,
+        contact_filter_paths=["/World/GroundCollider"],
+    )
     rotors = [RigidPrim(pth, max_contact_count=0) for pth in rotor_paths]
     # zero the asset's saved nonzero velocities at USD level (authoritative;
     # angularVelocity in USD is deg/s) before physics initialization
@@ -406,8 +413,26 @@ def _simulate(args: argparse.Namespace, settings: dict, app) -> None:
     if body_prim.HasAPI(PhysxSchema.PhysxContactReportAPI) is False:
         PhysxSchema.PhysxContactReportAPI.Apply(body_prim)
 
+    # runtime mass: body + rotors from the tensor API (rotor masses are
+    # density-derived; the authored 1.5 kg covers the body only)
+    import dataclasses
+
+    runtime_mass = None
+    try:
+        masses = [float(np.asarray(v.get_masses().numpy(), dtype=float)[0])
+                  for v in [body, *rotors]]
+        runtime_mass = float(sum(masses))
+        print(f"[{now_iso()}] runtime masses body+rotors: {masses} sum={runtime_mass}",
+              flush=True)
+    except Exception as error:
+        print(f"[{now_iso()}] mass query FAILED ({error}); refusing to fly on a "
+              "guessed mass", flush=True)
+        raise
+    if not 0.5 < runtime_mass < 5.0:
+        raise RuntimeError(f"implausible runtime mass {runtime_mass} kg")
+    flight_spec = dataclasses.replace(IRIS_SPEC, mass_kg=runtime_mass)
     controller = PositionAttitudeController(
-        spec=IRIS_SPEC, mixer_matrix=mixer_from_hubs(rotor_hubs()),
+        spec=flight_spec, mixer_matrix=mixer_from_hubs(rotor_hubs()),
         max_tilt_deg=25.0,
     )
     tracker = RouteTracker(route, ROUTE_SPEED, ROUTE_ACCEL)
@@ -426,10 +451,11 @@ def _simulate(args: argparse.Namespace, settings: dict, app) -> None:
     writer_fpv.attach([product_fpv])
 
     rows: list[dict] = []
+    contact_view_ok = True
     contacts_log: list[dict] = []
     abort = None
     last_yaw = 0.0
-    spin_sign = np.array([1.0, -1.0, -1.0, 1.0])  # alternating prop directions
+    spin_sign = REACTION_PATTERN  # same pattern as the mixer yaw row
     started = time.perf_counter()
 
     def state():
@@ -441,12 +467,13 @@ def _simulate(args: argparse.Namespace, settings: dict, app) -> None:
                 np.asarray(lin.numpy(), dtype=float)[0],
                 np.asarray(ang.numpy(), dtype=float)[0], r)
 
+    tick = 0
     for frame in range(total_frames):
-        t = frame / RENDER_FPS
         for _ in range(ticks_per_frame):
+            sim_t = tick * PHYSICS_DT  # one global clock: ref, state, stamp
             p, q, v, w_world, rot = state()
             w_body = rot.T @ w_world
-            ref_p, ref_v, label = tracker.at(t)
+            ref_p, ref_v, label = tracker.at(sim_t)
             if np.linalg.norm(ref_v) > 0.05:
                 dyaw = (np.arctan2(ref_v[1], ref_v[0]) - last_yaw + np.pi) % (2 * np.pi) - np.pi
                 last_yaw += float(np.clip(dyaw, -controller.YAW_RATE_LIMIT_RADS * PHYSICS_DT,
@@ -456,21 +483,31 @@ def _simulate(args: argparse.Namespace, settings: dict, app) -> None:
             torque = rot @ np.asarray(cmd["torque_body"], dtype=float)
             body.apply_forces_and_torques_at_pos(forces=force.reshape(1, 3),
                                                  torques=torque.reshape(1, 3))
-            # rotor spin: small speed-loop torque about each rotor's world z
+            # rotor visual spin: speed-loop torque about each rotor's spin
+            # axis measured in the BODY frame (rotors share the body z axis)
             for r_i, spin in zip(rotors, spin_sign):
                 _, r_ang = r_i.get_velocities()
-                w_r = np.asarray(r_ang.numpy(), dtype=float)[0]
-                tau_spin = ROTOR_SPIN_TORQUE * spin * (30.0 - spin * w_r[2]) / 30.0
+                w_r_world = np.asarray(r_ang.numpy(), dtype=float)[0]
+                w_r_body = rot.T @ w_r_world
+                tau_spin = ROTOR_SPIN_TORQUE * spin * (30.0 - spin * w_r_body[2]) / 30.0
                 r_i.apply_forces_and_torques_at_pos(
                     torques=(rot @ np.array([0.0, 0.0, tau_spin])).reshape(1, 3))
             SimulationManager.step()
-            sim_t = t + PHYSICS_DT
-            try:
-                cf = body.get_net_contact_forces()
-                contact_n = float(np.linalg.norm(np.asarray(cf.numpy(), dtype=float)[0]))
-            except Exception:
-                contact_n = 0.0
-            if contact_n > 0.5 and (not contacts_log or sim_t - contacts_log[-1]["t"] > 0.5):
+            tick += 1
+            if contact_view_ok:
+                try:
+                    cf = body.get_net_contact_forces(dt=PHYSICS_DT)
+                    contact_n = float(np.linalg.norm(np.asarray(cf.numpy(), dtype=float)[0]))
+                except Exception as error:
+                    contact_view_ok = False
+                    contact_n = None
+                    print(f"[{now_iso()}] contact view FAILED mid-run: {error}",
+                          flush=True)
+            else:
+                contact_n = None
+            if contact_n is not None and contact_n > 0.5 and (
+                not contacts_log or sim_t - contacts_log[-1]["t"] > 0.5
+            ):
                 contacts_log.append({"t": round(sim_t, 3), "force_n": round(contact_n, 2)})
             rows.append({
                 "t": round(sim_t, 4), "label": label,
@@ -478,7 +515,7 @@ def _simulate(args: argparse.Namespace, settings: dict, app) -> None:
                 "pos_x": p[0], "pos_y": p[1], "pos_z": p[2],
                 "thrust_n": round(cmd["total_thrust_n"], 3),
                 "tracking_error_m": round(cmd["position_error_m"], 4),
-                "contact_n": round(contact_n, 2),
+                "contact_n": (round(contact_n, 2) if contact_n is not None else None),
                 "saturated": int(cmd["saturated"]),
             })
             if not np.isfinite(p).all() or cmd["position_error_m"] > 5.0 or p[2] < 0.05:
@@ -500,7 +537,7 @@ def _simulate(args: argparse.Namespace, settings: dict, app) -> None:
         rep.orchestrator.step(rt_subframes=settings["rt_subframes"],
                               delta_time=0.0, pause_timeline=False)
         if frame % 30 == 0:
-            print(f"[{now_iso()}] frame {frame}/{total_frames} t={t:.1f}s", flush=True)
+            print(f"[{now_iso()}] frame {frame}/{total_frames} t={tick * PHYSICS_DT:.1f}s", flush=True)
 
     writer_chase.detach()
     writer_fpv.detach()
@@ -566,18 +603,25 @@ def _finalize(args, settings, rows, contacts_log, abort, wall, total_frames,
         "scene": "NVIDIA USD Explorer automotive factory sample (CAD-authored, "
                  "Omniverse terms, local use, not a named real plant scan)",
         "drone": "3DR Iris (Pegasus commit e13dc65, BSD-3) real meshes/mass/inertia",
-        "control": "handwritten cascaded PD on real Iris dynamics; simplified "
-                   "rotor thrust wrench; NOT trained, NOT autonomous",
+        "control": "handwritten cascaded PD on the real Iris body dynamics "
+                   "(runtime-measured mass); lumped-thrust flight with visual "
+                   "rotor-spin assist — NOT a full motor/aero model, NOT trained, "
+                   "NOT autonomous",
         "physics_notes": "factory meshes carry no collision primitives; safety by "
                          "clearance-planned corridor; ground collider + PhysX contact "
                          "logging active; rotor spin via small alternating torques",
         "bounds": bounds,
+        "runtime_mass_kg": runtime_mass,
         "mission_s": round(mission_s, 2),
         "ticks": len(rows),
         "tracking_rmse_m": float(np.sqrt(np.mean(np.square(errors)))),
         "tracking_max_m": float(np.max(errors)),
         "contact_events": contacts_log,
-        "collided": bool(contacts_log),
+        "contact_status": ("measured_body_vs_ground" if contact_view_ok
+                           else "unavailable_after_failure"),
+        "collided": (bool(contacts_log) if contact_view_ok else None),
+        "contact_monitoring_scope": "body link vs ground collider only; rotor "
+                                    "contacts not tracked",
         "video": videos,
         "frames_rendered": frame_counts,
         "trajectory_csv": str(csv_path),

@@ -62,6 +62,12 @@ def rotor_hubs() -> np.ndarray:
     return ROTOR_HUBS.copy()
 
 
+# declared spin signs for mixing AND the visual spin loop (single source):
+# diagonal pairs share direction; absolute truth is validated in smoke by
+# yaw-tracking behavior (flip both signs together if yaw diverges)
+REACTION_PATTERN = np.array([1.0, 1.0, -1.0, -1.0])
+
+
 def mixer_from_hubs(hubs: np.ndarray) -> np.ndarray:
     """Geometry-derived mixer A: wrench = A @ thrusts for hubs (4,3).
 
@@ -74,5 +80,4 @@ def mixer_from_hubs(hubs: np.ndarray) -> np.ndarray:
     up = np.array([0.0, 0.0, 1.0])
     row_x = [float(np.cross(hubs[i], up) @ ex) for i in range(4)]
     row_y = [float(np.cross(hubs[i], up) @ ey) for i in range(4)]
-    reaction = [1.0, 1.0, -1.0, -1.0]  # diagonal pairs same spin
-    return np.vstack([np.ones(4), row_x, row_y, reaction])
+    return np.vstack([np.ones(4), row_x, row_y, REACTION_PATTERN])
