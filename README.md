@@ -33,6 +33,7 @@ main 保留 `artifact`、`command`、`aholo` 重建后端。Aholo 云端模型�
 
 ## Latest News
 
+- **2026-11-15 — Benchmark GPU 流水线修复（[#25](https://github.com/miracle-techlink/video-to-simready/pull/25)）**：修复 worker 启动、输入打包、回执绑定与候选评分编排，并合入 main。PR head `0c04648` 的 native Isaac Sim 6.2 production suite 在 L40 上 2/2 成员执行完成，自动候选双视角评分通过；Docker/Isaac 6.1 和 Kit/RTX 真冷缓存仍未验收，评分仅为估计参考图上的 renderer reproduction。
 - **2026-11-15 — 工厂无人机仿真飞行演示**：在 NVIDIA Isaac Sim Factory USD 场景中使用 Iris 四旋翼模型完成 57.27 秒预设航点跟踪，并归档追随/FPV 双视角录像与轨迹。运行记录位于服务器 `/root/gpufree-data/liuyue/drone-tests/factory-full-record-20261115-191500/`；这是脚本航点演示，不代表自主导航或全场景无碰撞验收。
 - **2026-11-15 — 真实图像与分割评测**：加入真实图像 2D 区域 CLIP 编码及缓存证据校验，并提供 COCO 小样本分割评测工具与预测证据校验；工具上线不等于分割质量达标（[#24](https://github.com/miracle-techlink/video-to-simready/pull/24)、[#26](https://github.com/miracle-techlink/video-to-simready/pull/26)）。
 - **2026-11-15 — Isaac 部署指南**：补充实测导向的本地安装与运行指引（[#27](https://github.com/miracle-techlink/video-to-simready/pull/27)）。
@@ -49,7 +50,8 @@ main 保留 `artifact`、`command`、`aholo` 重建后端。Aholo 云端模型�
 
 ## To-do
 
-- [ ] 真实 GPU 多视角采集 → 候选独立评分 → 批量编排的全链验收。
+- [x] 在 native Isaac Sim 6.2/L40 上运行 production benchmark suite：多视角采集 → 候选生成 → 独立评分（PR #25 head `0c04648`，2/2 成员执行完成；仅验证估计参考图上的 renderer reproduction）。
+- [ ] Docker/Isaac 6.1 全链与 Kit/RTX 真冷缓存复验；需要可用的 Docker-capable runner 和隔离 Kit portable cache 的验收环境。
 - [ ] 三维点特征对齐。
 - [ ] 更大真实数据集分割评测与质量改进。
 - [ ] 带尺度/位姿参考的数据集上的重建评测。
