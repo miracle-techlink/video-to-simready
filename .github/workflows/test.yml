@@ -164,6 +164,7 @@ jobs:
         env:
           SIMREADY_WHEEL_SMOKE: '1'
         run: |
+          python -m pip install pytest
           wheel_files=(dist/*.whl)
           test "${#wheel_files[@]}" -eq 1
           export SIMREADY_WHEEL="${{ github.workspace }}/${wheel_files[0]}"
