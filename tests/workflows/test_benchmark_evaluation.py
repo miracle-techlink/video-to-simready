@@ -445,64 +445,83 @@ class TestSealedDiscipline:
 # -----------------------------------------------------------------------
 
 
+@pytest.fixture
+def benchmark_inputs(tmp_path):
+    """Bind synthetic observations, model artifacts and protocol consistently."""
+    from tests.fixtures.scene_candidate import make_scene_candidate
+
+    def relative_ref(path):
+        return {"path": path.name, "sha256": digest(path)}
+
+    protocol_path, _, _, candidate, _ = make_scene_candidate(tmp_path)
+    receipt_path, receipt = _make_render_receipt(tmp_path, view_ids=("front",))
+    rgb_path = tmp_path / receipt["views"][0]["rgb_file"]
+    shutil.copy2(tmp_path / "render.png", rgb_path)
+    receipt["views"][0]["rgb_sha256"] = digest(rgb_path)
+    write_json(receipt_path, receipt)
+
+    view_set = _make_view_set(view_ids=("front",))
+    camera_path = tmp_path / "cam.json"
+    write_json(camera_path, {"synthetic_fixture": True})
+    view_set["views"][0]["camera_evidence"] = relative_ref(camera_path)
+    view_set_path = tmp_path / "views.json"
+    write_json(view_set_path, view_set)
+    reconstruction = tmp_path / "recon.ply"
+    reconstruction.write_text("ply\nformat ascii 1.0\nelement vertex 0\nend_header\n")
+
+    eval_path = _make_evaluation_request(tmp_path)
+    render_request_path = tmp_path / "render_request.json"
+    render_request = read_json(render_request_path)
+    render_request["reconstruction"] = relative_ref(reconstruction)
+    render_request["view_set"] = relative_ref(view_set_path)
+    write_json(render_request_path, render_request)
+    evaluation = read_json(eval_path)
+    evaluation["protocol"]["sha256"] = digest(protocol_path)
+    evaluation["render_request"] = relative_ref(render_request_path)
+    write_json(eval_path, evaluation)
+    return {
+        "render_receipt_path": receipt_path,
+        "evaluation_request_path": eval_path,
+        "view_set": view_set,
+        "protocol_path": protocol_path,
+        "model_artifacts": candidate["artifacts"],
+    }
+
+
 class TestRunBenchmarkEvaluation:
-    def test_end_to_end_composition(self, tmp_path):
-        receipt_path, _ = _make_render_receipt(tmp_path)
-        eval_path = _make_evaluation_request(tmp_path)
-        view_set = _make_view_set()
-
-        # Create a protocol that matches the candidate we'll build.
-        from tests.fixtures.scene_candidate import make_scene_candidate
-
-        sc_dir = tmp_path / "sc"
-        sc_dir.mkdir()
-        p, c, protocol, candidate, image = make_scene_candidate(sc_dir)
-        # We need the protocol to have views matching our view set.
-        # For this test, we use the scene_candidate fixture directly.
+    @pytest.mark.parametrize("use_ledger", [False, True])
+    def test_end_to_end_composition(self, tmp_path, benchmark_inputs, use_ledger):
+        run_dir = tmp_path / "run"
         result = run_benchmark_evaluation(
-            receipt_path,
-            eval_path,
-            view_set,
-            p,
-            tmp_path / "run",
+            **benchmark_inputs,
+            run_dir=run_dir,
+            ledger_root=run_dir if use_ledger else None,
         )
-        assert (tmp_path / "run" / "benchmark_evaluation.json").is_file()
+        assert read_json(run_dir / "benchmark_evaluation.json") == result
         assert result["release_authorized"] is False
         assert result["sealed_discipline"]["release_authorized_remains_false"] is True
-        # Explicitly assert scoring execution status and quality status are present.
-        assert result["scoring"]["execution_status"] in ("COMPLETED", "FAILED")
-        assert result["scoring"]["quality_status"] in (
-            "PASS",
-            "FAIL",
-            "INCOMPLETE",
-            "EXECUTION_ERROR",
+        scoring = result["scoring"]
+        assert scoring["execution_status"] == "COMPLETED", scoring["execution_error"]
+        assert scoring["execution_error"] is None
+        assert scoring["quality_status"] == "PASS"
+        assert scoring["scorecard"]["status"] == "PASS"
+        assert scoring["scorecard_sha256"] == digest(run_dir / "scoring/scorecard.json")
+        if use_ledger:
+            receipt = read_json(run_dir / "stages/scoring.json")
+            assert receipt["result"] == scoring["scorecard"]
+            assert receipt["artifacts"][0]["sha256"] == scoring["scorecard_sha256"]
+
+    def test_end_to_end_failure_triggers_assertion(self, tmp_path, benchmark_inputs):
+        """A valid, passing candidate must fail after its RGB evidence changes."""
+        run_dir = tmp_path / "run"
+        baseline = run_benchmark_evaluation(
+            **benchmark_inputs,
+            run_dir=run_dir,
         )
-        # The verifier should not crash without a reason.
-        if result["scoring"]["execution_status"] == "FAILED":
-            assert result["scoring"]["execution_error"] is not None
-
-    def test_end_to_end_failure_triggers_assertion(self, tmp_path):
-        """A candidate with a bad image hash must produce a non-COMPLETED
-        scoring result, and this test must fail if it silently passes."""
-        receipt_path, receipt = _make_render_receipt(tmp_path)
-        eval_path = _make_evaluation_request(tmp_path)
-        view_set = _make_view_set()
-
-        from tests.fixtures.scene_candidate import make_scene_candidate
-
-        sc_dir = tmp_path / "sc"
-        sc_dir.mkdir()
-        p, c, protocol, candidate, image = make_scene_candidate(sc_dir)
-
-        run_benchmark_evaluation(
-            receipt_path,
-            eval_path,
-            view_set,
-            p,
-            tmp_path / "run",
-        )
+        assert baseline["scoring"]["execution_status"] == "COMPLETED"
+        assert baseline["scoring"]["quality_status"] == "PASS"
         # Now tamper with one of the candidate images to break the hash.
-        cand_dir = tmp_path / "run" / "candidate"
+        cand_dir = run_dir / "candidate"
         cand = read_json(cand_dir / "candidate.json")
         first_view = cand["views"][0]
         img_path = cand_dir / first_view["rgb"]["path"]
@@ -510,11 +529,15 @@ class TestRunBenchmarkEvaluation:
         img_path.write_bytes(b"tampered")
 
         # Re-run scoring on the tampered candidate.
-        scoring_dir = tmp_path / "run" / "scoring2"
-        scoring_dir.mkdir(exist_ok=True)
-        result2 = run_scoring(p, cand_dir / "candidate.json", scoring_dir, timeout=60)
-        # The verifier should detect the hash mismatch and not return COMPLETED.
-        assert (
-            result2["execution_status"] != "COMPLETED"
-            or result2["quality_status"] == "FAIL"
+        scoring_dir = run_dir / "scoring2"
+        result2 = run_scoring(
+            benchmark_inputs["protocol_path"],
+            cand_dir / "candidate.json",
+            scoring_dir,
+            timeout=60,
         )
+        assert result2["execution_status"] == "FAILED"
+        assert result2["quality_status"] == "EXECUTION_ERROR"
+        assert result2["scorecard"] is None
+        stderr = (run_dir / "scoring2.stderr.log").read_text()
+        assert f"SHA256 mismatch: {img_path}" in stderr

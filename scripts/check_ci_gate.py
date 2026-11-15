@@ -10,7 +10,9 @@ REQUIRED_JOBS = frozenset({"static", "test", "cpu-contract-tests", "package"})
 def require_success(results: dict) -> None:
     """Reject failures, skipped/cancelled jobs, missing jobs and malformed input."""
     if not isinstance(results, dict) or set(results) != REQUIRED_JOBS:
-        raise ValueError("CI needs must contain exactly static, test, cpu-contract-tests and package")
+        raise ValueError(
+            "CI needs must contain exactly static, test, cpu-contract-tests and package"
+        )
     for name in sorted(REQUIRED_JOBS):
         result = results[name]
         if not isinstance(result, dict) or result.get("result") != "success":
