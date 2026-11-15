@@ -7,6 +7,7 @@ from collections.abc import Sequence
 
 COMMANDS = {
     "baseline-matrix": "simready.workflows.pipelines.baseline_matrix",
+    "benchmark-suite": "simready.workflows.pipelines.benchmark_suite",
     "semantic-assets": "simready.workflows.pipelines.semantic_assets",
 }
 
