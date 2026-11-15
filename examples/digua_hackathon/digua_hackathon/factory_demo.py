@@ -56,16 +56,16 @@ ROTOR_SPIN_TORQUE = 0.004  # N*m, alternating; visual spin + real reaction
 # pending the helper's rendered layout confirmation; margins >=5 m to
 # walls/roof everywhere.
 FACTORY_ROUTE = [
-    {"pos": [-12.0, -24.0, 1.2], "hold": 2.0, "label": "takeoff_check"},
-    {"pos": [-12.0, -24.0, 4.0], "hold": 0.0, "label": "climb"},
-    {"pos": [-5.0, -18.0, 4.5], "hold": 0.0, "label": "approach_aisle"},
-    {"pos": [0.0, -8.0, 4.5], "hold": 1.0, "label": "station_west_line"},
-    {"pos": [0.0, 4.0, 4.5], "hold": 1.0, "label": "station_mid_line"},
-    {"pos": [0.0, 16.0, 4.5], "hold": 1.0, "label": "station_east_line"},
-    {"pos": [8.0, 20.0, 6.0], "hold": 0.0, "label": "climb_overview"},
-    {"pos": [8.0, -20.0, 7.5], "hold": 0.0, "label": "high_return"},
-    {"pos": [-10.0, -20.0, 6.0], "hold": 0.0, "label": "descend_west"},
-    {"pos": [-12.0, -24.0, 2.0], "hold": 2.0, "label": "final_hover"},
+    {"pos": [-6.0, 0.0, 2.0], "hold": 2.0, "label": "takeoff_check"},
+    {"pos": [-6.0, 0.0, 3.8], "hold": 0.0, "label": "climb"},
+    {"pos": [-6.0, -12.0, 4.2], "hold": 0.0, "label": "approach_aisle"},
+    {"pos": [-6.0, -20.0, 4.2], "hold": 1.0, "label": "station_south_line"},
+    {"pos": [0.0, -8.0, 4.2], "hold": 1.0, "label": "station_mid_west"},
+    {"pos": [0.0, 8.0, 4.2], "hold": 1.0, "label": "station_mid_east"},
+    {"pos": [-6.0, 18.0, 4.2], "hold": 1.0, "label": "station_north_line"},
+    {"pos": [-6.0, 24.0, 6.0], "hold": 0.0, "label": "climb_overview"},
+    {"pos": [-6.0, -18.0, 7.5], "hold": 0.0, "label": "high_return"},
+    {"pos": [-6.0, 0.0, 2.6], "hold": 2.0, "label": "final_hover"},
 ]
 ROUTE_SPEED = 3.0  # m/s (indoor factory: conservative cruise
 ROUTE_ACCEL = 2.5  # m/s^2
@@ -129,7 +129,7 @@ def _zero_saved_velocities(stage, root: str) -> int:
             continue
         if not prim.HasAPI(UsdPhysics.RigidBodyAPI):
             continue
-        for name in ("physics:linearVelocity", "physics:angularVelocity"):
+        for name in ("physics:velocity", "physics:angularVelocity"):
             attr = prim.GetAttribute(name)
             if attr and attr.Get() not in (None, (0.0, 0.0, 0.0)):
                 attr.Set((0.0, 0.0, 0.0))
@@ -141,13 +141,16 @@ def build_factory_stage(stage, factory_usd: Path, iris_usd: Path, start: np.ndar
     """Assemble factory (0.01-scaled reference) + Iris (1.0) in a meter stage."""
     from pxr import Gf, UsdGeom, UsdPhysics
 
+    # author local ops BEFORE adding references: the referenced roots carry
+    # their own xformOpOrder, and AddScaleOp/Translate afterwards collides
+    # with the composed op names. Local (stronger) order overrides cleanly.
     factory = UsdGeom.Xform.Define(stage, "/World/Factory")
-    factory.GetPrim().GetReferences().AddReference(str(factory_usd))
     factory.AddScaleOp().Set(Gf.Vec3f(0.01, 0.01, 0.01))  # cm layer -> meters
+    factory.GetPrim().GetReferences().AddReference(str(factory_usd))
 
     iris = UsdGeom.Xform.Define(stage, "/World/Iris")
-    iris.GetPrim().GetReferences().AddReference(str(iris_usd))
     iris.AddTranslateOp().Set(Gf.Vec3d(*start))
+    iris.GetPrim().GetReferences().AddReference(str(iris_usd))
 
     # physics-only ground plane at z=0 (invisible; the factory floor mesh has
     # no collision of its own)
@@ -281,7 +284,7 @@ def _simulate(args: argparse.Namespace, settings: dict, app) -> None:
     import omni.usd
     from isaacsim.core.simulation_manager import SimulationManager
     from isaacsim.core.utils.extensions import enable_extension
-    from pxr import Gf, UsdGeom, UsdPhysics
+    from pxr import Gf, Usd, UsdGeom, UsdPhysics
 
     enable_extension("omni.replicator.core")
     import omni.replicator.core as rep  # noqa: E402
@@ -309,11 +312,13 @@ def _simulate(args: argparse.Namespace, settings: dict, app) -> None:
     width, height = settings["width"], settings["height"]
 
     # report composed world bounds (unit-conversion evidence)
-    bb = UsdGeom.BBoxCache(Usd.TimeCode.Default(), ["render"], False)
-    factory_box = bb.ComputeWorldBounds(stage.GetPrimAtPath("/World/Factory"))
-    iris_box = bb.ComputeWorldBounds(stage.GetPrimAtPath("/World/Iris"))
-    fmin, fmax = factory_box.GetRange().GetMin(), factory_box.GetRange().GetMax()
-    imin, imax = iris_box.GetRange().GetMin(), iris_box.GetRange().GetMax()
+    bb = UsdGeom.BBoxCache(Usd.TimeCode.Default(), ["default", "render"], False)
+    factory_box = bb.ComputeWorldBound(stage.GetPrimAtPath("/World/Factory"))
+    iris_box = bb.ComputeWorldBound(stage.GetPrimAtPath("/World/Iris"))
+    frange = factory_box.ComputeAlignedRange()
+    irange = iris_box.ComputeAlignedRange()
+    fmin, fmax = frange.GetMin(), frange.GetMax()
+    imin, imax = irange.GetMin(), irange.GetMax()
     bounds = {
         "factory_world_bounds_m": {"min": list(fmin), "max": list(fmax)},
         "iris_world_bounds_m_at_start": {"min": list(imin), "max": list(imax),
@@ -381,9 +386,11 @@ def _simulate(args: argparse.Namespace, settings: dict, app) -> None:
     # --- physics flight (smoke / record) --------------------------------
     from isaacsim.core.experimental.prims import RigidPrim
 
+    for check_path in [IRIS_BODY_LINK] + [f"/World/Iris/rotor{i}" for i in range(4)]:
+        if not stage.GetPrimAtPath(check_path).IsValid():
+            raise RuntimeError(f"composed Iris prim missing: {check_path}")
     body = RigidPrim(IRIS_BODY_LINK, max_contact_count=64)
-    rotor_paths = ["/World/Iris/vehicle/rotor0", "/World/Iris/vehicle/rotor1",
-                   "/World/Iris/vehicle/rotor2", "/World/Iris/vehicle/rotor3"]
+    rotor_paths = [f"/World/Iris/rotor{i}" for i in range(4)]
     rotors = [RigidPrim(pth, max_contact_count=0) for pth in rotor_paths]
     # zero the asset's saved nonzero velocities at USD level (authoritative;
     # angularVelocity in USD is deg/s) before physics initialization

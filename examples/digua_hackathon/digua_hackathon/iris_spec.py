@@ -50,9 +50,11 @@ IRIS_SPEC = DroneSpec(
     name="3dr_iris_pegasus_e13dc65",
 )
 
-IRIS_PRIM_PATH = "/World/Iris/vehicle"
-IRIS_BODY_LINK = "/World/Iris/vehicle/body"  # authored rigid body (audit); mesh child only collides
-IRIS_ROTOR_PRIMS = [f"/World/Iris/vehicle/rotor{i}" for i in range(4)]
+# AddReference maps the asset defaultPrim (/vehicle) ONTO the referencing
+# prim: composed paths live directly under /World/Iris (no /vehicle level)
+IRIS_PRIM_PATH = "/World/Iris"
+IRIS_BODY_LINK = "/World/Iris/body"  # authored rigid body (audit)
+IRIS_ROTOR_PRIMS = [f"/World/Iris/rotor{i}" for i in range(4)]
 
 
 def rotor_hubs() -> np.ndarray:
