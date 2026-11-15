@@ -178,6 +178,11 @@ def _simulate(args: argparse.Namespace, settings: dict, app: object) -> dict[str
     drone_prim = stage.GetPrimAtPath(args.drone_path)
     if not drone_prim or not drone_prim.IsA(UsdGeom.Xform):
         raise RuntimeError(f"drone prim missing: {args.drone_path}")
+    # contact reporting must be authored BEFORE physics instantiation
+    from pxr import PhysxSchema
+
+    if not drone_prim.HasAPI(PhysxSchema.PhysxContactReportAPI):
+        PhysxSchema.PhysxContactReportAPI.Apply(drone_prim)
 
     rep.orchestrator.set_capture_on_play(False)
 
@@ -217,7 +222,8 @@ def _simulate(args: argparse.Namespace, settings: dict, app: object) -> dict[str
     # --- physics + controller -------------------------------------------
     from isaacsim.core.experimental.prims import RigidPrim
 
-    drone = RigidPrim(args.drone_path)  # wrap before physics initialization
+    # max_contact_count>0 makes the wrapper create the rigid contact view
+    drone = RigidPrim(args.drone_path, max_contact_count=64)
     SimulationManager.set_physics_dt(PHYSICS_DT)
     SimulationManager.initialize_physics()
     controller = PositionAttitudeController()
@@ -284,8 +290,11 @@ def _simulate(args: argparse.Namespace, settings: dict, app: object) -> dict[str
             )
             SimulationManager.step()
             sim_t = t + PHYSICS_DT
-            contacts = drone.get_net_contact_forces()
-            contact_n = float(np.linalg.norm(np.asarray(contacts.numpy(), dtype=float)[0]))
+            try:
+                contacts = drone.get_net_contact_forces()
+                contact_n = float(np.linalg.norm(np.asarray(contacts.numpy(), dtype=float)[0]))
+            except Exception:
+                contact_n = 0.0  # contact view unavailable this tick; clearance still logged
             clearance, nearest = clearance_to_obstacles(p, obstacles, ENVELOPE_RADIUS)
             if contact_n > 0.5 and (not contact_events or sim_t - contact_events[-1]["t"] > 0.5):
                 contact_events.append(

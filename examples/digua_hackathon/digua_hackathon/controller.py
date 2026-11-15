@@ -153,14 +153,14 @@ class PositionAttitudeController:
         as a simplification (their magnitude is negligible at demo speeds).
         """
         l = self.spec.arm_half_xy
-        # inv(A): rows map [F, tx, ty, tz] -> [f0..f3] with A columns the
-        # wrench each unit rotor thrust produces.
+        # inv(A) for the geometry-derived A in wrench_from_thrusts():
+        # rotor order 0(+x+y), 1(-x+y), 2(-x-y), 3(+x-y), all thrust +z.
         inv = np.array(
             [
-                [0.25, 0.25 / l, 0.25 / l, 0.25],
-                [0.25, -0.25 / l, 0.25 / l, -0.25],
-                [0.25, -0.25 / l, -0.25 / l, 0.25],
-                [0.25, 0.25 / l, -0.25 / l, -0.25],
+                [0.25, 0.25 / l, -0.25 / l, 0.25],
+                [0.25, 0.25 / l, 0.25 / l, -0.25],
+                [0.25, -0.25 / l, 0.25 / l, 0.25],
+                [0.25, -0.25 / l, -0.25 / l, -0.25],
             ]
         )
         thrusts = inv @ np.array([total_thrust, torque[0], torque[1], torque[2]])
@@ -171,13 +171,18 @@ class PositionAttitudeController:
     def wrench_from_thrusts(
         self, thrusts: np.ndarray
     ) -> tuple[float, np.ndarray]:
-        """Net force and body torque actually produced by rotor thrusts."""
+        """Net force and body torque actually produced by rotor thrusts.
+
+        Torque rows are r_i x f_i over the geometry in rotor_positions():
+        tx = l*(f0+f1-f2-f3), ty = l*(-f0+f1+f2-f3); tz is the assigned
+        rotor reaction-torque pattern (f0-f1+f2-f3).
+        """
         l = self.spec.arm_half_xy
         a = np.array(
             [
                 [1, 1, 1, 1],
-                [l, -l, -l, l],
                 [l, l, -l, -l],
+                [-l, l, l, -l],
                 [1, -1, 1, -1],
             ]
         )

@@ -46,6 +46,23 @@ def test_mixer_clamps_to_rotor_limits():
     assert achieved <= 4 * SPEC.rotor_max_thrust_n + 1e-9
 
 
+def test_wrench_matches_rotor_geometry():
+    """wrench_from_thrusts must equal sum(r_i x f_i) from rotor_positions()."""
+    from digua_hackathon.controller import rotor_positions
+
+    ctrl = PositionAttitudeController()
+    thrusts = np.array([3.0, 1.5, 2.0, 4.0])
+    force, torque = ctrl.wrench_from_thrusts(thrusts)
+    assert np.isclose(force, thrusts.sum())
+    expected = np.zeros(3)
+    for r, f in zip(rotor_positions(), thrusts, strict=True):
+        expected += np.cross(r, np.array([0.0, 0.0, f]))
+    # x/y torque must come purely from rotor geometry
+    assert np.allclose(torque[:2], expected[:2], atol=1e-12)
+    # z torque follows the declared reaction pattern (not a geometric term)
+    assert np.isclose(torque[2], thrusts[0] - thrusts[1] + thrusts[2] - thrusts[3])
+
+
 def test_hover_thrust_within_envelope():
     hover = SPEC.mass_kg * 9.81
     per_rotor = hover / 4
