@@ -17,7 +17,7 @@
   <text x="60" y="138" font-size="20" fill="#64748b">入口与输入</text>
   <rect x="60" y="150" width="420" height="92" rx="10" fill="#e0f2fe" stroke="#0284c7" stroke-width="2"/>
   <text x="80" y="184" font-size="24" font-weight="700" fill="#0c4a6e">simready CLI（唯一入口）</text>
-  <text x="80" y="218" font-size="19" fill="#075985">run · workflows · simulation · evaluation · execution</text>
+  <text x="80" y="218" font-size="19" fill="#075985">统一命令 · 配置分发</text>
 
   <rect x="510" y="150" width="420" height="92" rx="10" fill="#e0f2fe" stroke="#0284c7" stroke-width="2"/>
   <text x="530" y="184" font-size="24" font-weight="700" fill="#0c4a6e">输入</text>
@@ -48,11 +48,11 @@
   <rect x="60" y="468" width="304" height="252" rx="10" fill="#f0fdf4" stroke="#16a34a" stroke-width="2"/>
   <text x="80" y="506" font-size="28" font-weight="700" fill="#14532d">ingestion</text>
   <text x="80" y="544" font-size="22" fill="#166534">多后端重建适配</text>
-  <text x="80" y="578" font-size="22" fill="#166534">artifact · command · Aholo</text>
+  <text x="80" y="578" font-size="22" fill="#166534">导入 / 命令 / Aholo</text>
   <text x="80" y="612" font-size="22" fill="#166534">视频抽帧与观测提取</text>
   <text x="80" y="646" font-size="22" fill="#166534">文本定位分割（DINO+SAM）</text>
   <rect x="76" y="672" width="272" height="34" rx="6" fill="#bbf7d0" opacity="0.7"/>
-  <text x="88" y="696" font-size="19" fill="#14532d">输出：重建 bundle + 语义 mask</text>
+  <text x="88" y="696" font-size="19" fill="#14532d">输出：重建 bundle · mask</text>
 
   <rect x="399" y="468" width="304" height="252" rx="10" fill="#fefce8" stroke="#ca8a04" stroke-width="2"/>
   <text x="419" y="506" font-size="28" font-weight="700" fill="#713f12">assets</text>
@@ -82,9 +82,6 @@
   <line x1="364" y1="594" x2="395" y2="594" stroke="#334155" stroke-width="3" marker-end="url(#arrow)"/>
   <line x1="703" y1="594" x2="734" y2="594" stroke="#334155" stroke-width="3" marker-end="url(#arrow)"/>
   <line x1="1042" y1="594" x2="1073" y2="594" stroke="#334155" stroke-width="3" marker-end="url(#arrow)"/>
-  <text x="360" y="580" font-size="18" fill="#334155">产物</text>
-  <text x="699" y="580" font-size="18" fill="#334155">产物</text>
-  <text x="1030" y="580" font-size="18" fill="#334155">冻结产物</text>
 
   <!-- Layer 4: execution support (duties only, no arrows) -->
   <text x="60" y="764" font-size="20" fill="#64748b">执行支撑</text>
@@ -108,5 +105,5 @@
   <text x="134" y="1093" font-size="19" fill="#334155">实线箭头 = 功能层之间冻结产物流转（ingestion → assets → simulation → evaluation）</text>
   <line x1="60" y1="1120" x2="120" y2="1120" stroke="#7c3aed" stroke-width="2.5" stroke-dasharray="8 6" marker-end="url(#arrowDash)"/>
   <text x="134" y="1127" font-size="19" fill="#334155">虚线箭头 = 编排与调用（CLI → workflows → 各功能域）</text>
-  <text x="60" y="1152" font-size="19" fill="#475569">evaluation 只消费冻结产物，不导入 assets 写入路径；core 与 geometry 无相互依赖；精确允许依赖见 configs/architecture/module_boundaries.json</text>
+  <text x="60" y="1142" font-size="19" fill="#475569">evaluation 独立读回；core 与 geometry 相互独立。精确依赖见架构合同。</text>
 </svg>
