@@ -1,5 +1,7 @@
 # Source is mounted read-only by the host launcher; no credentials or data in image.
-ARG ISAAC_IMAGE=nvcr.io/nvidia/isaac-sim:6.1.0
+# Default tracks the cloud regression host (native Isaac 6.2.0-rc.14 line, GA tag 6.2.0).
+# ARM64 hosts (e.g. GB10) must override: --build-arg ISAAC_IMAGE=nvcr.io/nvidia/isaac-sim:6.1.0
+ARG ISAAC_IMAGE=nvcr.io/nvidia/isaac-sim:6.2.0
 FROM ${ISAAC_IMAGE} AS runtime
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core \
