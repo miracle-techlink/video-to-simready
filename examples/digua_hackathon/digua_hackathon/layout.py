@@ -236,9 +236,12 @@ MISSION_WAYPOINTS: list[Waypoint] = [
     Waypoint((-4.0, 8.5, 4.2), hold_s=1.0, label="inspect_gantry_w"),
     Waypoint((4.0, 8.5, 4.2), hold_s=1.0, label="inspect_breakers"),
     Waypoint((14.0, 8.5, 4.2), hold_s=1.0, label="inspect_bank_B"),
-    Waypoint((20.0, 8.5, 7.0), label="climb_overview"),
-    Waypoint((20.0, -8.5, 7.0), label="cross_yard"),
-    Waypoint((0.0, -8.5, 5.0), hold_s=1.5, label="south_pass"),
+    Waypoint((20.0, 8.5, 8.5), label="climb_overview"),
+    Waypoint((20.0, -8.5, 8.5), label="cross_yard"),
+    # stay at 8.5 m across BOTH gantry planes (x=+/-4, beam top 6.85 + envelope)
+    # and descend only west of x=-5.5: never cross a busbar plane at bar height
+    Waypoint((-5.5, -8.5, 8.5), label="south_approach"),
+    Waypoint((-12.0, -8.5, 5.0), hold_s=1.5, label="south_pass"),
     Waypoint((-24.0, -8.5, 3.0), label="exit_west"),
     Waypoint((-24.0, -4.0, 1.5), hold_s=2.0, label="final_hover"),
 ]
