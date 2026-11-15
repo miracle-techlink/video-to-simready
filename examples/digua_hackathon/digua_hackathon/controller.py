@@ -53,6 +53,7 @@ class PositionAttitudeController:
         kp_att: float = 9.0,
         kd_att: float = 3.2,
         max_tilt_deg: float = 30.0,
+        mixer_matrix: np.ndarray | None = None,
     ) -> None:
         self.spec = spec
         self.kp_pos = kp_pos
@@ -60,6 +61,9 @@ class PositionAttitudeController:
         self.kp_att = kp_att
         self.kd_att = kd_att
         self.max_tilt = float(np.radians(max_tilt_deg))
+        # optional geometry-derived mixer (wrench = A @ thrusts), e.g. for the
+        # real Iris hub layout; defaults to the symmetric X-config matrix
+        self.mixer_a = mixer_matrix
 
     # -- helpers -----------------------------------------------------------
 
@@ -180,17 +184,7 @@ class PositionAttitudeController:
         about their spin axes are modeled as direct yaw authority, documented
         as a simplification (their magnitude is negligible at demo speeds).
         """
-        l = self.spec.arm_half_xy
-        # inv(A) for the geometry-derived A in wrench_from_thrusts():
-        # rotor order 0(+x+y), 1(-x+y), 2(-x-y), 3(+x-y), all thrust +z.
-        inv = np.array(
-            [
-                [0.25, 0.25 / l, -0.25 / l, 0.25],
-                [0.25, 0.25 / l, 0.25 / l, -0.25],
-                [0.25, -0.25 / l, 0.25 / l, 0.25],
-                [0.25, -0.25 / l, -0.25 / l, -0.25],
-            ]
-        )
+        inv = np.linalg.inv(self._mixer_matrix())
         thrusts = inv @ np.array([total_thrust, torque[0], torque[1], torque[2]])
         clipped = np.clip(thrusts, 0.0, self.spec.rotor_max_thrust_n)
         saturated = bool(not np.allclose(clipped, thrusts, atol=1e-6))
@@ -205,8 +199,14 @@ class PositionAttitudeController:
         tx = l*(f0+f1-f2-f3), ty = l*(-f0+f1+f2-f3); tz is the assigned
         rotor reaction-torque pattern (f0-f1+f2-f3).
         """
+        wrench = self._mixer_matrix() @ thrusts
+        return float(wrench[0]), wrench[1:]
+
+    def _mixer_matrix(self) -> np.ndarray:
+        if self.mixer_a is not None:
+            return self.mixer_a
         l = self.spec.arm_half_xy
-        a = np.array(
+        return np.array(
             [
                 [1, 1, 1, 1],
                 [l, l, -l, -l],
@@ -214,5 +214,3 @@ class PositionAttitudeController:
                 [1, -1, 1, -1],
             ]
         )
-        wrench = a @ thrusts
-        return float(wrench[0]), wrench[1:]
