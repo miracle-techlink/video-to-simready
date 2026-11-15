@@ -179,6 +179,60 @@ def _feature_prediction(payload, property_name, freeze):
     return _interval(result), parameters, details
 
 
+def _bound_visual_inference(request, payload, model, freeze, mode):
+    """Verify an optional encoder receipt that must cover the payload bytes.
+
+    ``new_visual_inference_performed`` may only become True when the request
+    binds a visual-features receipt whose own flags record a real encoder
+    execution, whose CLIP identity matches ``model_identity``, and whose
+    output feature file is byte-identical to the payload's ``features`` npz.
+    Anything weaker (a receipt about some other encoding, or cached replay)
+    keeps the honest False. No current producer emits V,N,D receipts, so
+    requests without this block always stay cached-replay.
+    """
+    visual = request.get("visual_inference")
+    if visual is None:
+        return False
+    require(
+        mode == "feature_regression",
+        "visual_inference receipts apply to feature_regression only",
+    )
+    require(isinstance(visual, dict), "visual_inference must be an object")
+    receipt = read_json(freeze(visual.get("receipt")))
+    require(
+        receipt.get("new_visual_inference_performed") is True
+        and receipt.get("encoder_executed_this_run") is True,
+        "The bound receipt must itself record a real encoder execution",
+    )
+    require(
+        receipt.get("inference_kind") == "2d_region_clip_encoding",
+        "Unexpected visual inference kind in receipt",
+    )
+    receipt_model = receipt.get("model") or {}
+    require(
+        receipt_model.get("backbone") == model.get("clip_backbone")
+        and receipt_model.get("pretrained") == model.get("checkpoint"),
+        "Receipt CLIP identity differs from the request model_identity",
+    )
+    receipt_weights = (receipt_model.get("weights") or {}).get("sha256")
+    require(
+        model.get("weights_sha256") in (None, receipt_weights),
+        "Receipt weight hash differs from the request model_identity",
+    )
+    outputs = receipt.get("outputs") or {}
+    encoded = (outputs.get("features_npz") or {}).get("sha256")
+    require(
+        isinstance(encoded, str) and re.fullmatch(r"[a-f0-9]{64}", encoded),
+        "Receipt must reference its encoded feature file with a sha256",
+    )
+    require(
+        payload.get("features", {}).get("sha256") == encoded,
+        "Payload features are not the receipt's encoded output; a receipt "
+        "about a different encoding cannot justify new_visual_inference",
+    )
+    return True
+
+
 def run_estimation(request_path: PathLike, output_dir: PathLike) -> Path:
     """Produce one PhysicalCandidate from pinned inputs; no network or model downloads."""
     request_path = Path(request_path).resolve()
@@ -235,6 +289,9 @@ def run_estimation(request_path: PathLike, output_dir: PathLike) -> Path:
         "Invalid model weight hash",
     )
     payload = read_json(freeze(request["payload"]))
+    new_visual_inference = _bound_visual_inference(
+        request, payload, model, freeze, mode
+    )
     scale_ref = (
         reference(freeze(request["scale_evidence"]))
         if property_name == "mass"
@@ -282,11 +339,15 @@ def run_estimation(request_path: PathLike, output_dir: PathLike) -> Path:
             "model_identity": model,
             "parameters": parameters,
             "feature_regression_performed": mode == "feature_regression",
-            # feature_regression replays cached CLIP features through a CPU
-            # regression head; it does not encode new images, so this stays
-            # False until a real visual encoder is wired in.
-            "new_visual_inference_performed": False,
-            "visual_inference_note": "cached feature replay; no new image encoding performed",
+            # True only when a receipt-bound real encoder run produced the
+            # exact payload bytes (see _bound_visual_inference); replaying
+            # cached features keeps the honest False.
+            "new_visual_inference_performed": new_visual_inference,
+            "visual_inference_note": (
+                "receipt-bound encoder output verified against payload bytes"
+                if new_visual_inference
+                else "cached feature replay; no new image encoding performed"
+            ),
             "upstream_revision_assertion": "caller_supplied_with_local_file_hashes",
         },
         "properties": properties,

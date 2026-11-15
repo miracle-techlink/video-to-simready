@@ -19,6 +19,10 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         return aholo_main(argv[1:])
+    if argv and argv[0] == "encode-features":
+        from simready.ingestion.visual_features import main as encode_main
+
+        return encode_main(argv[1:])
     parser = argparse.ArgumentParser(
         description="Extract video observations or submit/resume Aholo reconstruction."
     )
@@ -29,6 +33,9 @@ def main(argv: list[str] | None = None) -> int:
     subcommands.add_parser("ground", help="Open-vocabulary Grounding DINO + SAM masks")
     subcommands.add_parser(
         "aholo", help="Receipt-based cloud reconstruction and monitoring"
+    )
+    subcommands.add_parser(
+        "encode-features", help="Evidence-bound real-image CLIP feature encoding"
     )
     command = subcommands.add_parser("extract")
     command.add_argument("--video", required=True)
