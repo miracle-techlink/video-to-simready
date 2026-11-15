@@ -36,7 +36,7 @@ main 保留 `artifact`、`command`、`aholo` 重建后端。Aholo 云端模型�
 **已验证记录（绑定运行版本）**：
 
 - PR #21 合入前候选 [`bcd89d8`](https://github.com/miracle-techlink/video-to-simready/commit/bcd89d88579dfd7e38a4d7bc2dcfd4e1466e15fc)（代码现已随 PR #21 进入 main）：其上的独立 CPU 验收为全量 1274 通过/19 跳过/0 失败，真实 CLI suite 编排与防篡改/取消反例通过。计数属于当时运行版本，不代表最新 main 各平台计数。
-- 真实 DINO+SAM 在门店视频 3 帧经生产入口运行成功（30 个检测实例、工件自洽核验）——执行正确性范围，无人工参考 mask，**检测/分割准确率未验证**。
+- 历史基线 `8870f88` 上的真实 DINO+SAM 在门店视频 3 帧经生产入口运行成功（30 个检测实例、工件自洽核验）——执行正确性范围，无人工参考 mask，**检测/分割准确率未验证**。
 
 **已提交待验 / 未合入**：
 
