@@ -57,7 +57,7 @@ MODE_SETTINGS = {
     "record": {"width": 1280, "height": 720, "duration_s": None, "rt_subframes": 2,
                "encode": True},  # None = mission duration + settle margin
 }
-RECORD_MAX_S = 36.0
+RECORD_MAX_S = 38.0
 
 
 def now_iso() -> str:
@@ -127,7 +127,7 @@ def run_isaac(args: argparse.Namespace) -> dict[str, object]:
 
     settings = dict(MODE_SETTINGS[args.mode])
     if settings["duration_s"] is None:
-        settings["duration_s"] = min(RECORD_MAX_S, mission_duration_s() + 2.5)
+        settings["duration_s"] = min(RECORD_MAX_S, mission_duration_s() + 3.0)
     app = SimulationApp(
         {"headless": True, "limit_cpu_threads": 4, "fast_shutdown": True},
         experience=os.path.join(os.environ["EXP_PATH"], "isaacsim.exp.base.kit"),

@@ -242,8 +242,8 @@ MISSION_WAYPOINTS: list[Waypoint] = [
     # and descend only west of x=-5.5: never cross a busbar plane at bar height
     Waypoint((-5.5, -8.5, 8.5), label="south_approach"),
     Waypoint((-12.0, -8.5, 5.0), hold_s=1.5, label="south_pass"),
-    Waypoint((-22.0, -8.5, 3.0), label="exit_west"),
-    Waypoint((-22.0, -4.0, 1.5), hold_s=2.0, label="final_hover"),
+    Waypoint((-22.0, -8.5, 3.0), hold_s=1.0, label="exit_west"),
+    Waypoint((-22.0, -4.5, 1.6), hold_s=2.5, label="final_hover"),
 ]
 
 MISSION_SPEED_MS = 5.0  # cruise speed between waypoints
