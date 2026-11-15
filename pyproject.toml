@@ -34,6 +34,10 @@ version = {attr = "simready.__version__"}
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    "real_model: tests requiring real model weights (SAM/Grounding DINO/NeRF2Physics); skipped by default",
+    "gpu: tests requiring GPU/Isaac Sim; skipped by default",
+]
 
 [tool.ruff]
 target-version = "py310"
