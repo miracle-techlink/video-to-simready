@@ -238,6 +238,10 @@ def _simulate(args: argparse.Namespace, settings: dict, app: object) -> dict[str
 
     # max_contact_count>0 makes the wrapper create the rigid contact view
     drone = RigidPrim(args.drone_path, max_contact_count=64)
+    # USD writeback instead of fabric-only transforms: on this headless
+    # base.kit build the fabric->Hydra bridge never picked up rigid-body
+    # motion (drone rendered frozen / invisible). updateToUsd renders motion.
+    SimulationManager.enable_fabric(False)
     SimulationManager.set_physics_dt(PHYSICS_DT)
     SimulationManager.initialize_physics()
     controller = PositionAttitudeController()
@@ -246,6 +250,16 @@ def _simulate(args: argparse.Namespace, settings: dict, app: object) -> dict[str
     duration_s = float(settings["duration_s"])
     ticks_per_frame = round((1.0 / RENDER_FPS) / PHYSICS_DT)
     total_frames = int(round(duration_s * RENDER_FPS))
+
+    # initial FPV pose before warmup (a transform-less camera renders from
+    # the origin, i.e. inside the ground: pure black)
+    start_pos = np.array(MISSION_WAYPOINTS[0].position, dtype=float)
+    fpv_translate.Set(
+        _look_at(
+            start_pos + np.array([0.21, 0.0, -0.055]),
+            start_pos + np.array([0.21, 0.0, -0.055]) + np.array([0.9397, 0.0, -0.3420]),
+        )
+    )
 
     # warmup renders (shader compile) with writers detached
     writer_chase.detach()
