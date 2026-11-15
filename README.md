@@ -21,9 +21,9 @@ main 保留 `artifact`、`command`、`aholo` 重建后端。Aholo 云端模型�
 |---|---|---|
 | 11-10 | 仓库创建；首个提交 [`d83d6e2`](https://github.com/miracle-techlink/video-to-simready/commit/d83d6e2)（带入的 PowerGrid/Aholo 黑客松历史内容） | 仅建立基线；初始历史内容中的功能不作为当日新验证声明 |
 | 11-11 | —（未找到可核验记录） | — |
-| 11-12 | [#1](https://github.com/miracle-techlink/video-to-simready/pull/1) 资源感知执行器（GPU UUID 租约/调度、哈希缓存、CPU fixture）；[#2](https://github.com/miracle-techlink/video-to-simready/pull/2) bounded agent/记忆/技能；[#3](https://github.com/miracle-techlink/video-to-simready/pull/3) simready 模块化与统一 CLI；[#4](https://github.com/miracle-techlink/video-to-simready/pull/4) 变电站场景 physics→独立审计→渲染回放 | #1 的 79 项测试为合成调度与缓存验证，不代表真实 GPU；#4 完成 20/20 检查与 714 帧 1080p 回放，复用已冻结 Aholo 场景/锚点，不是新视频重建或通用导航验证（[当日性能档案](https://github.com/miracle-techlink/video-to-simready/blob/ff5edab/docs/profiling.md)、[审计报告](https://github.com/miracle-techlink/video-to-simready/blob/ff5edab/docs/audits/2026-11-12-substation-profile.md)，文件现仅存在于该历史提交） |
+| 11-12 | [#1](https://github.com/miracle-techlink/video-to-simready/pull/1) 资源感知执行器（GPU UUID 租约/调度、哈希缓存、CPU fixture）；[#2](https://github.com/miracle-techlink/video-to-simready/pull/2) bounded agent/记忆/技能；[#3](https://github.com/miracle-techlink/video-to-simready/pull/3) simready 模块化与统一 CLI；[#4](https://github.com/miracle-techlink/video-to-simready/pull/4) 变电站场景 physics→独立审计→渲染回放 | #1 的 79 项 CPU 测试及合成调度/缓存演示，不代表真实 GPU 验证；#4 完成 20/20 检查与 714 帧 1080p 回放，复用已冻结 Aholo 场景/锚点，不是新视频重建或通用导航验证（[当日性能档案](https://github.com/miracle-techlink/video-to-simready/blob/ff5edab/docs/profiling.md)、[审计报告](https://github.com/miracle-techlink/video-to-simready/blob/ff5edab/docs/audits/2026-11-12-substation-profile.md)，文件现仅存在于该历史提交） |
 | 11-13 | [#5](https://github.com/miracle-techlink/video-to-simready/pull/5) 场景工作流/机器人接口/Isaac 部署打包；[#6](https://github.com/miracle-techlink/video-to-simready/pull/6) 一条命令场景交付；[#7](https://github.com/miracle-techlink/video-to-simready/pull/7) 可恢复 new-video 流水线；[#8](https://github.com/miracle-techlink/video-to-simready/pull/8)–[#12](https://github.com/miracle-techlink/video-to-simready/pull/12) 文档（白皮书/README/Aholo API/物性计划）；[#13](https://github.com/miracle-techlink/video-to-simready/pull/13) 多类别语义资产与可审计物体物理 | #7 为 427 项测试 + 1 跳过（该 PR 时点数量）：旧视频 + 已声明的缓存 PLY 导出/恢复 + 12 帧 GPU 巡览，非新云重建、非外观质量/尺度/任务通过；#13 真实 DINO+SAM 图像运行 + RGBD、9 项合成 PhysX 响应通过——无语义 GT 与真实物性准确性结论 |
-| 11-14 | [#14](https://github.com/miracle-techlink/video-to-simready/pull/14) 模块化流水线/阶段恢复/baseline 矩阵/merge-gate/main 绑定 SHA 安装包；[#15](https://github.com/miracle-techlink/video-to-simready/pull/15) 仓库清理；[#16](https://github.com/miracle-techlink/video-to-simready/pull/16) main 核心/专用演示分离；[#17](https://github.com/miracle-techlink/video-to-simready/pull/17)–[#19](https://github.com/miracle-techlink/video-to-simready/pull/19) 工程指南/示例整合/runtime 子层 | CI 侧 merge-gate 与 main 安装包绑定 SHA 交付上线（CPU 范围）；仓库外服务器完成真实门店视频 12 关键帧全新重建→USD→Isaac 巡览（`d65696a`，111,365 高斯点，21:12 CST `checked_at`）——尺度未验证、物性未评估、任务未验证、未修复的诊断性巡览；另有截至 11-15 复核存在的历史静态修复预览（v6，`REPAIRED_PREVIEW_REVIEWED`，完成日期未单独核实）。摘要见 [docs/progress/2026-11-14-acceptance.json](docs/progress/2026-11-14-acceptance.json)（历史验收记录，非当日 main 整链通过） |
+| 11-14 | [#14](https://github.com/miracle-techlink/video-to-simready/pull/14) 模块化流水线/阶段恢复/baseline 矩阵/merge-gate/main 绑定 SHA 安装包；[#15](https://github.com/miracle-techlink/video-to-simready/pull/15) 仓库清理；[#16](https://github.com/miracle-techlink/video-to-simready/pull/16) main 核心/专用演示分离；[#17](https://github.com/miracle-techlink/video-to-simready/pull/17)–[#19](https://github.com/miracle-techlink/video-to-simready/pull/19) 工程指南/示例整合/runtime 子层 | CI 侧 merge-gate 与 main 安装包绑定 SHA 交付上线（CPU 范围）；仓库外服务器完成真实门店视频 12 关键帧全新重建→USD→Isaac 巡览（`d65696a`，111,365 高斯点，21:12 CST `checked_at`）——尺度未验证、物性未评估、任务未验证、未修复的诊断性巡览。摘要见 [docs/progress/2026-11-14-acceptance.json](docs/progress/2026-11-14-acceptance.json)（历史验收记录，非当日 main 整链通过；其中 v6 静态修复预览完成日期未单独核实，另见今日“复核历史记录”） |
 | 11-15 | 详见下节 | 详见下节 |
 
 ### 2026-11-15（今日，截至 15:06 CST）
@@ -33,13 +33,19 @@ main 保留 `artifact`、`command`、`aholo` 重建后端。Aholo 云端模型�
 - [#21](https://github.com/miracle-techlink/video-to-simready/pull/21) benchmark 基础设施（14:52 合入，`1aa5233`）：benchmark 输入合同、批量观测 worker 代码、candidate 独立评分、矩阵/suite 编排、CPU 合同测试、真实模型 opt-in 测试骨架。main CI（[run 43687418431](https://github.com/miracle-techlink/video-to-simready/actions/runs/43687418431)）：Python 3.10/3.12 CPU 回归、contract、package、merge-gate 全部通过——**CPU/打包范围**，不含真实模型/GPU。
 - [#20](https://github.com/miracle-techlink/video-to-simready/pull/20) 外部开发者指南（15:02 合入）。
 
+**已验证记录（绑定运行版本）**：
+
+- PR #21 合入前候选 [`bcd89d8`](https://github.com/miracle-techlink/video-to-simready/commit/bcd89d88579dfd7e38a4d7bc2dcfd4e1466e15fc)（代码现已随 PR #21 进入 main）：其上的独立 CPU 验收为全量 1274 通过/19 跳过/0 失败，真实 CLI suite 编排与防篡改/取消反例通过。计数属于当时运行版本，不代表最新 main 各平台计数。
+- 真实 DINO+SAM 在门店视频 3 帧经生产入口运行成功（30 个检测实例、工件自洽核验）——执行正确性范围，无人工参考 mask，**检测/分割准确率未验证**。
+
 **已提交待验 / 未合入**：
 
-- PR #21 的独立验收候选 `bcd89d8`（不在 main）：CPU 全量 1274 通过/19 跳过/0 失败，真实 CLI suite 编排与防篡改/取消反例通过——该数字属候选分支独立验收，不是 main 各平台最新结果。
 - [#22](https://github.com/miracle-techlink/video-to-simready/pull/22)（draft，CI 全绿待审）：CI 失败证据保留（JUnit+artifact）、CI scope 报告（real_model/gpu 显式 NOT_RUN）、wheel smoke 安装加固、手动验收指南（随该 PR 引入 `docs/ACCEPTANCE_RUNBOOK.md`）。GPU 的 Actions 自动通道**未接入**（仓库无 secrets/runner）。
-- benchmark GPU 入口真实复验发现启动/相对路径/prim 名/退出码问题、auto 输入包缺相机证据；修复补丁（`c4bed58` 等）已提交在 fix 分支但**未经正式复验，不算 GPU 通过**。同 SHA 的 `depth_observation` 双视角成功仅为独立诊断，不作为新入口通过。
+- benchmark GPU 入口真实复验发现启动/相对路径/prim 名/退出码问题、auto 输入包缺相机证据；修复补丁（`c4bed58` 等）已提交在 fix 分支但**未经正式复验，不算 GPU 通过**。历史基线 `8870f88` 上的 `depth_observation` 双视角成功仅为独立诊断，既不证明新入口、也不适用新补丁。
 
-**开发中（无通过声明）**：真实 DINO+SAM 在门店视频 3 帧运行（30 个检测实例，无人工 GT 准确率）；NeRF2Physics 公式与缓存特征回归已测，真实图片 CLIP 新编码与真实物性测量 GT 缺失（`feat/real-image-feature-encoding`、`test/real-data-segmentation-acceptance`：COCO val2017 5 张人工标注小样本推理中）；地瓜分支 `feat/digua-hackathon-drone-substation`：合成变电站 + PhysX 四旋翼 PID/预设航点录制实现中，无成片、无训练与自主导航结论。
+**开发中（无通过声明）**：真实图片 CLIP 新特征编码（`feat/real-image-feature-encoding`）与真实物性测量 GT 仍缺失（NeRF2Physics 公式与缓存特征回归已测）；`test/real-data-segmentation-acceptance`：COCO val2017 5 张人工标注小样本真实推理中，未出最终准确率；地瓜分支 `feat/digua-hackathon-drone-substation`：合成变电站 + PhysX 四旋翼 PID/预设航点录制实现中，无成片、无训练与自主导航结论。
+
+**复核历史记录**：11-14 摘要 JSON 中的 v6 静态修复预览（`REPAIRED_PREVIEW_REVIEWED`）经今日复核确认记录存在；其 delivery/summary/quality-review JSON 均无完成/审核绝对时间字段，完成日期未单独核实（`date_status: not_recorded`），不计为 11-14 当日完成项。
 
 ### 下一步计划 / To-do
 
