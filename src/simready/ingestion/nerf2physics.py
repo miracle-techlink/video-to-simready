@@ -281,7 +281,12 @@ def run_estimation(request_path: PathLike, output_dir: PathLike) -> Path:
             "implementation": "simready_cpu_kernel_port",
             "model_identity": model,
             "parameters": parameters,
+            "feature_regression_performed": mode == "feature_regression",
+            # feature_regression replays cached CLIP features through a CPU
+            # regression head; it does not encode new images, so this stays
+            # False until a real visual encoder is wired in.
             "new_visual_inference_performed": False,
+            "visual_inference_note": "cached feature replay; no new image encoding performed",
             "upstream_revision_assertion": "caller_supplied_with_local_file_hashes",
         },
         "properties": properties,

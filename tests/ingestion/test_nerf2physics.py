@@ -56,6 +56,7 @@ def test_synthetic_mass_candidate_records_unknowns_and_all_sources(
     candidate = read_json(run_estimation(request_path, tmp_path / "out"))
     assert candidate["object_id"] == "fixture-cup"
     assert candidate["method"]["execution_mode"] == "synthetic_fixture"
+    assert candidate["method"]["feature_regression_performed"] is False
     assert candidate["method"]["new_visual_inference_performed"] is False
     assert candidate["method"]["upstream_commit"] is None
     assert candidate["properties"]["mass_kg"]["interval"] == pytest.approx(
@@ -147,6 +148,8 @@ def test_official_prediction_replay_is_distinct_from_new_regression(
     write_json(request_path, config)
     candidate = read_json(run_estimation(request_path, tmp_path / "out"))
     assert candidate["method"]["execution_mode"] == "official_prediction_replay"
+    assert candidate["method"]["feature_regression_performed"] is False
+    assert candidate["method"]["new_visual_inference_performed"] is False
     assert candidate["properties"]["mass_kg"]["value"] == 1.5
     assert reference(source) in candidate["evidence"]
 

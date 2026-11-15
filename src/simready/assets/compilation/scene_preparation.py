@@ -44,12 +44,17 @@ def prepare_scene(
     ply: PathLike,
     output: PathLike,
     spec: JsonObject | str | Path | None = None,
+    *,
+    lighting_policy: str = "auto",
 ) -> JsonObject:
     """Write portable layers and evidence; return the preparation.json contents.
 
     Supported spec keys: schema_version, source_to_world, scale_provenance,
     world_up_axis, floor_plane, collision, objects, camera and render. Textures,
     arbitrary object USD imports and automatic semantic inference are excluded.
+    ``lighting_policy`` controls the default DomeLight: ``"auto"`` (current
+    behaviour) always adds one, ``"none"`` never adds one, ``"frozen"`` adds
+    one only when the scene contains no existing light.
     """
     from pxr import Usd, UsdGeom, UsdLux, UsdPhysics
 
@@ -249,8 +254,16 @@ def prepare_scene(
         physics = UsdPhysics.Scene.Define(stage, "/World/Physics")
         physics.CreateGravityDirectionAttr((0, 0, -1))
         physics.CreateGravityMagnitudeAttr(9.81)
-        light = UsdLux.DomeLight.Define(stage, "/World/Light")
-        light.CreateIntensityAttr(800.0)
+        if lighting_policy not in ("auto", "none", "frozen"):
+            raise ValueError(f"Unknown lighting_policy: {lighting_policy!r}")
+        has_existing_light = any(
+            prim.HasAPI(UsdLux.LightAPI) for prim in stage.Traverse()
+        )
+        if lighting_policy == "auto" or (
+            lighting_policy == "frozen" and not has_existing_light
+        ):
+            light = UsdLux.DomeLight.Define(stage, "/World/Light")
+            light.CreateIntensityAttr(800.0)
         stage.GetRootLayer().Save()
         loaded = Usd.Stage.Open(str(temporary / "scene.usda"))
         if not loaded or not loaded.GetPrimAtPath("/World/Appearance/Source"):
