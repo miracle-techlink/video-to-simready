@@ -15,6 +15,7 @@ happens outside that factory.
 import argparse
 import json
 import re
+import shutil
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -171,6 +172,27 @@ def _validated_request(request, resolve):
         "cpu_threads must be an integer in [1, 16]",
     )
     return request
+
+
+def _environment_identity() -> dict:
+    """Implementation/environment identity a cache replay must reproduce.
+
+    Cache keys bind request inputs only; replay additionally requires this
+    identity (visual_features.py code digest + installed torch/open_clip
+    versions) to match the entry that was written, so an upgraded
+    implementation never silently replays features encoded by an older one.
+    """
+
+    from importlib import metadata
+
+    environment = {}
+    for package in ("torch", "open_clip_torch"):
+        try:
+            environment[package] = metadata.version(package)
+        except metadata.PackageNotFoundError:
+            environment[package] = None
+    environment["visual_features_code_sha256"] = digest(Path(__file__))
+    return environment
 
 
 def _cache_core(request, weights_sha256, region_metas):
@@ -447,46 +469,59 @@ def encode_regions(
     pipeline_report = None
     load_report = None
     cache_meta = None
+    cache_event = None
+    environment = _environment_identity()
     if cache_entry is not None and (cache_entry / "features.npz").is_file():
         import numpy as np
 
         cache_npz = cache_entry / "features.npz"
         cache_meta = read_json(cache_entry / "cache-meta.json")
         require(cache_meta.get("key") == cache_key, "Cache metadata key mismatch")
-        cached_dim = int(cache_meta["feature_dim"])
-        expected_dim = request["model"].get("expected_feature_dim")
-        require(
-            expected_dim is None or expected_dim == cached_dim,
-            f"Cache feature dim {cached_dim} differs from expected {expected_dim}",
-        )
-        with np.load(cache_npz, allow_pickle=False) as cached:
+        # Replay integrity (review V1): the entry's bytes must still hash to
+        # what was written; identity (review V2): the encoding implementation
+        # must be the same one that produced the entry. Either failing means
+        # the entry is NOT a faithful record of a prior encode of these
+        # inputs — treat it as a miss, re-encode, and say so in the receipt.
+        if cache_meta.get("environment") != environment:
+            cache_event = "cache_environment_or_code_mismatch_reencoded"
+        elif digest(cache_npz) != cache_meta.get("features_npz_sha256"):
+            cache_event = "cache_features_npz_sha_mismatch_reencoded"
+        if cache_event is None:
+            cached_dim = int(cache_meta["feature_dim"])
+            expected_dim = request["model"].get("expected_feature_dim")
             require(
-                cached["region_ids"].tolist() == [r["region_id"] for r in region_metas],
-                "Cache entry region ids differ from the request",
+                expected_dim is None or expected_dim == cached_dim,
+                f"Cache feature dim {cached_dim} differs from expected {expected_dim}",
             )
-            features = _validate_features(
-                cached["image_features"],
-                len(crops),
-                cached_dim,
-                "Cached image features",
-            )
-            text_features = None
-            if texts is not None:
+            with np.load(cache_npz, allow_pickle=False) as cached:
                 require(
-                    prompts is not None and cached["prompts"].tolist() == prompts,
-                    "Cache entry prompts differ from the request",
+                    cached["region_ids"].tolist()
+                    == [r["region_id"] for r in region_metas],
+                    "Cache entry region ids differ from the request",
                 )
-                text_features = _validate_text_features(
-                    cached["text_features"], prompts, cached_dim
+                features = _validate_features(
+                    cached["image_features"],
+                    len(crops),
+                    cached_dim,
+                    "Cached image features",
                 )
-        arrays = {
-            "region_ids": np.array([r["region_id"] for r in region_metas]),
-            "image_features": features,
-        }
-        if text_features is not None:
-            arrays["text_features"] = text_features
-            arrays["prompts"] = np.array(prompts)
-        encoder_executed = False
+                text_features = None
+                if texts is not None:
+                    require(
+                        prompts is not None and cached["prompts"].tolist() == prompts,
+                        "Cache entry prompts differ from the request",
+                    )
+                    text_features = _validate_text_features(
+                        cached["text_features"], prompts, cached_dim
+                    )
+            arrays = {
+                "region_ids": np.array([r["region_id"] for r in region_metas]),
+                "image_features": features,
+            }
+            if text_features is not None:
+                arrays["text_features"] = text_features
+                arrays["prompts"] = np.array(prompts)
+            encoder_executed = False
 
     if encoder_executed:
         import numpy as np
@@ -529,8 +564,18 @@ def encode_regions(
             arrays["text_features"] = text_features
             arrays["prompts"] = np.array(prompts)
         pipeline_report = load_report["preprocess_pipeline"]
-        if cache_entry is not None:
-            cache_entry.mkdir(parents=True, exist_ok=False)
+
+    require(
+        not any(Path(ref["path"]).is_relative_to(output) for ref in frozen),
+        "Output cannot contain encoding inputs",
+    )
+    # Review V3: every frozen input is re-hashed BEFORE any cache entry is
+    # written, so a run whose inputs changed mid-flight fails here without
+    # leaving a poisoned entry keyed to the old (verified) hashes.
+    ensure_unchanged(frozen)
+    if encoder_executed and cache_entry is not None:
+        try:
+            cache_entry.mkdir(parents=True, exist_ok=True)
             _atomic_write_npz(cache_entry / "features.npz", arrays)
             write_json(
                 cache_entry / "cache-meta.json",
@@ -542,14 +587,19 @@ def encode_regions(
                     "pretrained": request["model"]["pretrained"],
                     "weights_sha256": weights_sha256,
                     "feature_dim": int(features.shape[1]),
+                    "features_npz_sha256": digest(cache_entry / "features.npz"),
+                    "environment": environment,
+                    "encoder_env": {
+                        "torch_version": load_report["torch_version"],
+                        "open_clip_version": load_report["open_clip_version"],
+                        "preprocess_pipeline": pipeline_report,
+                    },
                 },
             )
-
-    require(
-        not any(Path(ref["path"]).is_relative_to(output) for ref in frozen),
-        "Output cannot contain encoding inputs",
-    )
-    ensure_unchanged(frozen)
+        except BaseException:
+            # Never leave a partial or unverified entry behind.
+            shutil.rmtree(cache_entry, ignore_errors=True)
+            raise
     output.mkdir(parents=True)
     features_path = output / "region-features.npz"
     _atomic_write_npz(features_path, arrays)
@@ -567,10 +617,15 @@ def encode_regions(
             torch_version=load_report["torch_version"],
             open_clip_version=load_report["open_clip_version"],
         )
+        if cache_event:
+            runtime["cache_event"] = cache_event
     else:
         runtime.update(
             cached_from=str(cache_entry / "features.npz"),
+            cached_features_sha256=cache_meta.get("features_npz_sha256"),
             first_encoded_at=cache_meta.get("created_at"),
+            cached_environment=cache_meta.get("environment"),
+            cached_encoder_env=cache_meta.get("encoder_env"),
         )
     receipt = {
         "schema_version": RECEIPT_SCHEMA_VERSION,

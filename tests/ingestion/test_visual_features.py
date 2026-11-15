@@ -391,17 +391,177 @@ def test_cache_hit_replays_without_encoding_and_flags_stay_honest(scene, tmp_pat
     assert third["cache_hit"] is False
     assert FakeEncoder.calls["images"] == 2
 
-    # A tampered cache entry (corrupt npz) is rejected, not silently used.
+    # A corrupted cache entry is never replayed: the run re-encodes and the
+    # receipt says so (cache_event) instead of silently serving bad bytes.
     for entry in cache.iterdir():
-        npz = entry / "features.npz"
-        npz.write_bytes(b"not an npz")
-    with pytest.raises(ValueError):
+        (entry / "features.npz").write_bytes(b"not an npz")
+    fourth = read_json(
         encode_regions(
             request_for(scene),
             tmp_path / "run4",
             cache_dir=cache,
             encoder_factory=fake_factory,
         )
+    )
+    assert fourth["cache_hit"] is False
+    assert fourth["new_visual_inference_performed"] is True
+    assert (
+        fourth["runtime"]["cache_event"] == "cache_features_npz_sha_mismatch_reencoded"
+    )
+    assert FakeEncoder.calls["images"] == 3
+    # And the refreshed entry replays honestly again.
+    fifth = read_json(
+        encode_regions(
+            request_for(scene),
+            tmp_path / "run5",
+            cache_dir=cache,
+            encoder_factory=fake_factory,
+        )
+    )
+    assert fifth["cache_hit"] is True
+    assert FakeEncoder.calls["images"] == 3
+
+
+def test_tampered_same_shape_cache_is_not_replayed(scene, tmp_path):
+    """Review V1 probe as a regression test: same-shape/finite/normalized
+    substitute vectors in a cache entry must not be signed out as a cached
+    replay of the original encoding."""
+    cache = tmp_path / "cache"
+    first = read_json(
+        encode_regions(
+            request_for(scene),
+            tmp_path / "a",
+            cache_dir=cache,
+            encoder_factory=fake_factory,
+        )
+    )
+    honest = (tmp_path / "a" / "region-features.npz").read_bytes()
+    entry = next(cache.iterdir())
+    with np.load(entry / "features.npz", allow_pickle=False) as data:
+        blocks = {k: data[k].copy() for k in data.files}
+    blocks["image_features"] = (blocks["image_features"] * -0.5 + 3.0).astype(
+        np.float32
+    )
+    np.savez(entry / "features.npz", **blocks)
+
+    second = read_json(
+        encode_regions(
+            request_for(scene),
+            tmp_path / "b",
+            cache_dir=cache,
+            encoder_factory=fake_factory,
+        )
+    )
+    assert second["cache_hit"] is False, "tampered entry must not be replayed"
+    assert second["new_visual_inference_performed"] is True
+    assert (
+        second["runtime"]["cache_event"] == "cache_features_npz_sha_mismatch_reencoded"
+    )
+    replayed = (tmp_path / "b" / "region-features.npz").read_bytes()
+    assert replayed == honest, "re-encode must restore the true features"
+    assert first["cache_key"] == second["cache_key"]
+
+
+def test_cache_replay_requires_same_implementation_environment(
+    scene, tmp_path, monkeypatch
+):
+    """Review V2: an entry written by a different visual_features.py code
+    digest or library set is a miss, never a silent replay."""
+    import simready.ingestion.visual_features as module
+
+    cache = tmp_path / "cache"
+    encode_regions(
+        request_for(scene),
+        tmp_path / "a",
+        cache_dir=cache,
+        encoder_factory=fake_factory,
+    )
+    original = module._environment_identity()
+
+    def upgraded():
+        return {**original, "torch": "99.99.0-upgraded"}
+
+    monkeypatch.setattr(module, "_environment_identity", upgraded)
+    second = read_json(
+        encode_regions(
+            request_for(scene),
+            tmp_path / "b",
+            cache_dir=cache,
+            encoder_factory=fake_factory,
+        )
+    )
+    assert second["cache_hit"] is False
+    assert (
+        second["runtime"]["cache_event"]
+        == "cache_environment_or_code_mismatch_reencoded"
+    )
+
+    def edited_code():
+        return {**original, "visual_features_code_sha256": "0" * 64}
+
+    monkeypatch.setattr(module, "_environment_identity", edited_code)
+    third = read_json(
+        encode_regions(
+            request_for(scene),
+            tmp_path / "c",
+            cache_dir=cache,
+            encoder_factory=fake_factory,
+        )
+    )
+    assert third["cache_hit"] is False
+    assert (
+        third["runtime"]["cache_event"]
+        == "cache_environment_or_code_mismatch_reencoded"
+    )
+
+    # Restore identity: one miss refreshes the entry with the current
+    # identity, and the run after that replays honestly.
+    monkeypatch.setattr(module, "_environment_identity", lambda: original)
+    fourth = read_json(
+        encode_regions(
+            request_for(scene),
+            tmp_path / "d",
+            cache_dir=cache,
+            encoder_factory=fake_factory,
+        )
+    )
+    assert fourth["cache_hit"] is False  # meta still carries the edited-code env
+    fifth = read_json(
+        encode_regions(
+            request_for(scene),
+            tmp_path / "e",
+            cache_dir=cache,
+            encoder_factory=fake_factory,
+        )
+    )
+    assert fifth["cache_hit"] is True
+    inherited = fifth["runtime"]
+    assert inherited["cached_environment"]["torch"] == original["torch"]
+    assert inherited["cached_features_sha256"] is not None
+    assert inherited["cached_encoder_env"]["preprocess_pipeline"]["resize_size"] == 224
+
+
+def test_failed_run_leaves_no_cache_entry(scene, tmp_path):
+    """Review V3: if an input mutates mid-run (here: the factory observes and
+    replaces the weights bytes after the request bound the old hash), the run
+    fails honestly and no cache entry is written for the verified key."""
+
+    def racing_factory(model_spec, weights_path, device, cpu_threads):
+        weights_path.read_bytes()  # factory reads the file, as the real one does
+        weights_path.write_bytes(b"swapped-mid-run")  # simulate the race window
+        return fake_factory(model_spec, weights_path, device, cpu_threads)
+
+    cache = tmp_path / "cache"
+    with pytest.raises(ValueError, match="[Ff]rozen campaign evidence changed"):
+        encode_regions(
+            request_for(scene),
+            tmp_path / "out",
+            cache_dir=cache,
+            encoder_factory=racing_factory,
+        )
+    assert not cache.exists() or not any(cache.iterdir()), (
+        "no cache entry may survive a failed run"
+    )
 
 
 def test_output_rejects_existing_dir(scene, tmp_path):
