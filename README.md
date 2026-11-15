@@ -33,6 +33,7 @@ main 保留 `artifact`、`command`、`aholo` 重建后端。Aholo 云端模型�
 
 ## Latest News
 
+- **2026-11-15 — 工厂无人机仿真飞行演示**：在 NVIDIA Isaac Sim Factory USD 场景中使用 Iris 四旋翼模型完成 57.27 秒预设航点跟踪，并归档追随/FPV 双视角录像与轨迹。运行记录位于服务器 `/root/gpufree-data/liuyue/drone-tests/factory-full-record-20261115-191500/`；这是脚本航点演示，不代表自主导航或全场景无碰撞验收。
 - **2026-11-15 — 真实图像与分割评测**：加入真实图像 2D 区域 CLIP 编码及缓存证据校验，并提供 COCO 小样本分割评测工具与预测证据校验；工具上线不等于分割质量达标（[#24](https://github.com/miracle-techlink/video-to-simready/pull/24)、[#26](https://github.com/miracle-techlink/video-to-simready/pull/26)）。
 - **2026-11-15 — Isaac 部署指南**：补充实测导向的本地安装与运行指引（[#27](https://github.com/miracle-techlink/video-to-simready/pull/27)）。
 - **2026-11-15 — Benchmark 与 CI**：加入统一 benchmark 输入合同、候选场景独立评分与批量对比编排，完善 CPU/打包测试与失败报告（[#21](https://github.com/miracle-techlink/video-to-simready/pull/21)、[#22](https://github.com/miracle-techlink/video-to-simready/pull/22)）。
@@ -52,7 +53,7 @@ main 保留 `artifact`、`command`、`aholo` 重建后端。Aholo 云端模型�
 - [ ] 三维点特征对齐。
 - [ ] 更大真实数据集分割评测与质量改进。
 - [ ] 带尺度/位姿参考的数据集上的重建评测。
-- [ ] 工业工厂场景与真实无人机资产的飞行演示（地瓜分支）。
+- [x] 工业工厂场景与 Iris 四旋翼模型的预设航点跟踪演示；完整范围与未验收项见服务器运行记录。自主导航仍待完成。
 - [ ] 自主定位/避障/导航训练。
 - [ ] 受控 GPU CI 与部署回滚。
 
