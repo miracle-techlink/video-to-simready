@@ -62,3 +62,47 @@ def test_profile_rejects_joint_group_disagreement():
             state_transport="test",
             simulation_command_transport="test",
         )
+
+
+def test_measured_limit_noise_is_diagnosed_without_weakening_command_bounds():
+    profile = load_robot_profile(PROFILES / "rebot-b601-rs.json")
+    now = 10_000_000_000
+    noisy_value = 0.050_001
+    positions = {joint.name: 0.0 for joint in profile.joints}
+    positions["gripper_joint1"] = noisy_value
+    state = RobotState(positions=positions, received_monotonic_ns=now)
+
+    diagnostics = validate_robot_state(
+        profile,
+        state,
+        now_monotonic_ns=now,
+        max_age_s=0.1,
+        measured_limit_tolerance=0.000_01,
+    )
+
+    assert state.positions["gripper_joint1"] == noisy_value
+    assert len(diagnostics) == 1
+    diagnostic = diagnostics[0]
+    assert diagnostic.joint_name == "gripper_joint1"
+    assert diagnostic.direction == "above_upper"
+    assert diagnostic.nearest_limit == 0.05
+    assert diagnostic.overshoot == pytest.approx(0.000_001)
+    assert diagnostic.unit == "m"
+
+    command = JointCommand(
+        group="gripper",
+        positions={"gripper_joint1": noisy_value, "gripper_joint2": noisy_value},
+        issued_monotonic_ns=now,
+        valid_for_s=0.1,
+        sequence=1,
+    )
+    with pytest.raises(ValueError, match="outside"):
+        validate_joint_command(profile, command, now_monotonic_ns=now)
+    with pytest.raises(ValueError, match="more than tolerance"):
+        validate_robot_state(
+            profile,
+            state,
+            now_monotonic_ns=now,
+            max_age_s=0.1,
+            measured_limit_tolerance=0.000_000_1,
+        )

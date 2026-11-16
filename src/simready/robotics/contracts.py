@@ -104,6 +104,18 @@ class RobotState:
 
 
 @dataclass(frozen=True)
+class JointLimitDiagnostic:
+    """A measured limit overshoot accepted within an explicit state tolerance."""
+
+    joint_name: str
+    measured_value: float
+    nearest_limit: float
+    overshoot: float
+    direction: str
+    unit: str
+
+
+@dataclass(frozen=True)
 class JointCommand:
     """A bounded position target for exactly one declared joint group."""
 
@@ -146,9 +158,25 @@ def validate_robot_state(
     *,
     now_monotonic_ns: int,
     max_age_s: float,
-) -> None:
+    measured_limit_tolerance: float = 0.0,
+) -> tuple[JointLimitDiagnostic, ...]:
+    """Validate measured feedback and report tolerated limit overshoots.
+
+    Measured joint positions are never clamped: values just outside a
+    declared limit but within ``measured_limit_tolerance`` are accepted and
+    reported as :class:`JointLimitDiagnostic` entries, while larger
+    overshoots are rejected. Requested commands stay strictly bounded; see
+    :func:`validate_joint_command`.
+    """
     if max_age_s <= 0:
         raise ValueError("max_age_s must be positive")
+    if (
+        not isinstance(measured_limit_tolerance, (int, float))
+        or isinstance(measured_limit_tolerance, bool)
+        or not math.isfinite(measured_limit_tolerance)
+        or measured_limit_tolerance < 0
+    ):
+        raise ValueError("measured_limit_tolerance must be a nonnegative finite number")
     age_ns = now_monotonic_ns - state.received_monotonic_ns
     if age_ns < 0 or age_ns > max_age_s * 1_000_000_000:
         raise ValueError(f"robot state is stale or from the future: age_ns={age_ns}")
@@ -159,7 +187,9 @@ def validate_robot_state(
             f"joint state names differ from profile: missing={sorted(expected - received)}, "
             f"unknown={sorted(received - expected)}"
         )
-    _validate_values(profile, state.positions)
+    diagnostics = _validate_measured_values(
+        profile, state.positions, measured_limit_tolerance
+    )
     for field_name, values in (
         ("velocities", state.velocities),
         ("efforts", state.efforts),
@@ -169,6 +199,49 @@ def validate_robot_state(
                 raise ValueError(f"{field_name} joint names differ from profile")
             if not all(math.isfinite(value) for value in values.values()):
                 raise ValueError(f"{field_name} contains a non-finite value")
+    return diagnostics
+
+
+def _validate_measured_values(
+    profile: RobotProfile,
+    values: Mapping[str, float],
+    tolerance: float,
+) -> tuple[JointLimitDiagnostic, ...]:
+    joint_map = profile.joint_map()
+    diagnostics: list[JointLimitDiagnostic] = []
+    for name, value in values.items():
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise ValueError(f"joint {name!r} value must be finite")
+        if not math.isfinite(value):
+            raise ValueError(f"joint {name!r} value must be finite")
+        joint = joint_map[name]
+        if joint.lower is None or joint.upper is None:
+            continue
+        if joint.lower <= value <= joint.upper:
+            continue
+        if value < joint.lower:
+            nearest_limit = joint.lower
+            direction = "below_lower"
+        else:
+            nearest_limit = joint.upper
+            direction = "above_upper"
+        overshoot = abs(value - nearest_limit)
+        if overshoot > tolerance:
+            raise ValueError(
+                f"joint {name!r} measured value {value} outside [{joint.lower}, {joint.upper}] "
+                f"{joint.unit} by more than tolerance {tolerance}"
+            )
+        diagnostics.append(
+            JointLimitDiagnostic(
+                joint_name=name,
+                measured_value=value,
+                nearest_limit=nearest_limit,
+                overshoot=overshoot,
+                direction=direction,
+                unit=joint.unit,
+            )
+        )
+    return tuple(diagnostics)
 
 
 def validate_joint_command(

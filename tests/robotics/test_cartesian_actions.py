@@ -1,0 +1,354 @@
+import math
+
+import pytest
+
+from simready.robotics.cartesian_actions import (
+    CartesianEefTarget,
+    CartesianSafetyLimits,
+    GripperTarget,
+    TimedActionSegment,
+    validate_cartesian_action_segment,
+)
+
+NOW = 10_000_000_000
+IDENTITY_WXYZ = (1.0, 0.0, 0.0, 0.0)
+
+LIMITS = CartesianSafetyLimits(
+    workspace_frame="robot_base",
+    workspace_lower_m=(-0.5, -0.5, 0.0),
+    workspace_upper_m=(0.5, 0.5, 0.5),
+    gripper_opening_lower_m=0.0,
+    gripper_opening_upper_m=0.05,
+    max_translation_step_m=0.08,
+    max_rotation_step_rad=0.2,
+    max_horizon_s=1.0,
+)
+CURRENT = CartesianEefTarget(
+    frame="robot_base",
+    position_m=(0.0, 0.0, 0.25),
+    orientation_wxyz=IDENTITY_WXYZ,
+)
+
+
+def make_segment(
+    *,
+    sequence: int = 1,
+    position_m: tuple[float, float, float] = (0.0, 0.0, 0.25),
+    orientation_wxyz: tuple[float, float, float, float] = IDENTITY_WXYZ,
+    frame: str = "robot_base",
+    opening_m: float = 0.02,
+    issued_monotonic_ns: int = NOW,
+    valid_for_s: float = 0.5,
+    duration_s: float = 0.2,
+) -> TimedActionSegment:
+    return TimedActionSegment(
+        target=CartesianEefTarget(
+            frame=frame,
+            position_m=position_m,
+            orientation_wxyz=orientation_wxyz,
+        ),
+        gripper=GripperTarget(opening_m=opening_m),
+        issued_monotonic_ns=issued_monotonic_ns,
+        valid_for_s=valid_for_s,
+        duration_s=duration_s,
+        sequence=sequence,
+    )
+
+
+def validate(
+    segment: TimedActionSegment,
+    *,
+    limits: CartesianSafetyLimits = LIMITS,
+    current_eef: CartesianEefTarget = CURRENT,
+    now_monotonic_ns: int = NOW,
+    last_sequence: int | None = None,
+) -> None:
+    validate_cartesian_action_segment(
+        limits,
+        segment,
+        current_eef=current_eef,
+        now_monotonic_ns=now_monotonic_ns,
+        last_sequence=last_sequence,
+    )
+
+
+def test_valid_segment_on_inclusive_boundary_is_accepted():
+    segment = make_segment(
+        position_m=(0.08, 0.0, 0.25),
+        opening_m=LIMITS.gripper_opening_upper_m,
+        sequence=7,
+    )
+    validate(segment, last_sequence=6)
+
+
+def test_malformed_segment_type_is_rejected():
+    with pytest.raises(ValueError, match="segment must be TimedActionSegment"):
+        validate(object())  # type: ignore[arg-type]
+
+
+def test_malformed_limits_type_is_rejected():
+    with pytest.raises(ValueError, match="limits must be CartesianSafetyLimits"):
+        validate(make_segment(), limits=object())  # type: ignore[arg-type]
+
+
+def test_boolean_now_timestamp_is_rejected():
+    with pytest.raises(ValueError, match="now_monotonic_ns must be an integer"):
+        validate(make_segment(), now_monotonic_ns=True)  # type: ignore[arg-type]
+
+
+def test_boolean_sequence_is_rejected():
+    segment = make_segment(sequence=True)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="sequence must be an integer"):
+        validate(segment)
+
+
+@pytest.mark.parametrize("issued_monotonic_ns", [True, 0.5, None])
+def test_malformed_issued_timestamp_is_rejected(issued_monotonic_ns):
+    segment = make_segment(issued_monotonic_ns=issued_monotonic_ns)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="issued_monotonic_ns must be an integer"):
+        validate(segment)
+
+
+def test_negative_sequence_is_rejected():
+    with pytest.raises(ValueError, match="sequence must be nonnegative"):
+        validate(make_segment(sequence=-1))
+
+
+def test_duplicate_sequence_is_rejected():
+    with pytest.raises(ValueError, match="must increase monotonically"):
+        validate(make_segment(sequence=5), last_sequence=5)
+
+
+def test_out_of_order_sequence_is_rejected():
+    with pytest.raises(ValueError, match="must increase monotonically"):
+        validate(make_segment(sequence=4), last_sequence=5)
+
+
+def test_malformed_last_sequence_is_rejected():
+    with pytest.raises(ValueError, match="last_sequence must be an integer or None"):
+        validate(make_segment(), last_sequence=True)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    ["valid_for_s", "duration_s"],
+)
+def test_nonpositive_or_nonfinite_timing_is_rejected(field_name):
+    for bad_value in [0.0, -0.1, math.inf, math.nan, True]:
+        segment = make_segment(**{field_name: bad_value})  # type: ignore[arg-type]
+        with pytest.raises(ValueError, match=f"{field_name} must be"):
+            validate(segment)
+
+
+def test_validity_above_max_horizon_is_rejected():
+    with pytest.raises(ValueError, match="valid_for_s exceeds max_horizon_s"):
+        validate(make_segment(valid_for_s=LIMITS.max_horizon_s + 0.1))
+
+
+def test_duration_above_max_horizon_is_rejected():
+    with pytest.raises(ValueError, match="duration_s exceeds max_horizon_s"):
+        validate(make_segment(duration_s=LIMITS.max_horizon_s + 0.1))
+
+
+def test_duration_above_validity_is_rejected():
+    with pytest.raises(ValueError, match="duration_s must not exceed valid_for_s"):
+        validate(make_segment(valid_for_s=0.3, duration_s=0.4))
+
+
+def test_expired_segment_is_rejected():
+    segment = make_segment(issued_monotonic_ns=NOW - 1_000_000_000, valid_for_s=0.5)
+    with pytest.raises(ValueError, match="expired or from the future"):
+        validate(segment)
+
+
+def test_future_segment_is_rejected():
+    segment = make_segment(issued_monotonic_ns=NOW + 1)
+    with pytest.raises(ValueError, match="expired or from the future"):
+        validate(segment)
+
+
+def test_malformed_target_type_is_rejected():
+    segment = make_segment()
+    object.__setattr__(segment, "target", object())
+    with pytest.raises(ValueError, match="segment target must be CartesianEefTarget"):
+        validate(segment)
+
+
+def test_nonstring_frame_is_rejected():
+    segment = make_segment(frame=None)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="frame must be a nonempty string"):
+        validate(segment)
+
+
+def test_wrong_frame_is_rejected():
+    with pytest.raises(ValueError, match="does not match"):
+        validate(make_segment(frame="world"))
+
+
+def test_wrong_position_unit_is_rejected():
+    segment = make_segment()
+    object.__setattr__(segment.target, "position_unit", "mm")
+    with pytest.raises(ValueError, match="position_unit must be 'm'"):
+        validate(segment)
+
+
+def test_wrong_quaternion_order_is_rejected():
+    segment = make_segment()
+    object.__setattr__(segment.target, "quaternion_order", "xyzw")
+    with pytest.raises(ValueError, match="quaternion_order must be 'wxyz'"):
+        validate(segment)
+
+
+@pytest.mark.parametrize(
+    ("position_m", "name"),
+    [
+        ((0.0, 0.0), "position_m must be a tuple of 3"),
+        ((0.0, 0.0, 0.25, 0.0), "position_m must be a tuple of 3"),
+        ([0.0, 0.0, 0.25], "position_m must be a tuple of 3"),
+        ((0.0, 0.0, math.nan), "position_m must be a finite number"),
+    ],
+)
+def test_malformed_target_position_is_rejected(position_m, name):
+    with pytest.raises(ValueError, match=name):
+        validate(make_segment(position_m=position_m))
+
+
+@pytest.mark.parametrize(
+    ("orientation_wxyz", "name"),
+    [
+        ((1.0, 0.0, 0.0), "orientation_wxyz must be a tuple of 4"),
+        ([1.0, 0.0, 0.0, 0.0], "orientation_wxyz must be a tuple of 4"),
+        ((1.0, 0.0, 0.0, math.nan), "must be a finite number"),
+        ((0.5, 0.0, 0.0, 0.0), "must be normalized"),
+    ],
+)
+def test_malformed_target_orientation_is_rejected(orientation_wxyz, name):
+    with pytest.raises(ValueError, match=name):
+        validate(make_segment(orientation_wxyz=orientation_wxyz))
+
+
+def test_negated_quaternion_is_the_same_orientation():
+    segment = make_segment(
+        orientation_wxyz=(-1.0, 0.0, 0.0, 0.0),
+        position_m=CURRENT.position_m,
+    )
+    validate(segment)
+
+
+def test_malformed_current_eef_is_rejected():
+    with pytest.raises(ValueError, match="current_eef must be CartesianEefTarget"):
+        validate(make_segment(), current_eef=object())  # type: ignore[arg-type]
+
+
+def test_current_eef_wrong_frame_is_rejected():
+    current = CartesianEefTarget(
+        frame="world",
+        position_m=CURRENT.position_m,
+        orientation_wxyz=IDENTITY_WXYZ,
+    )
+    with pytest.raises(ValueError, match="current_eef frame"):
+        validate(make_segment(), current_eef=current)
+
+
+def test_current_eef_denormalized_quaternion_is_rejected():
+    current = CartesianEefTarget(
+        frame="robot_base",
+        position_m=CURRENT.position_m,
+        orientation_wxyz=(0.5, 0.0, 0.0, 0.0),
+    )
+    with pytest.raises(
+        ValueError, match="current_eef orientation_wxyz must be normalized"
+    ):
+        validate(make_segment(), current_eef=current)
+
+
+def test_malformed_gripper_target_is_rejected():
+    segment = make_segment()
+    object.__setattr__(segment, "gripper", object())
+    with pytest.raises(ValueError, match="gripper must be GripperTarget"):
+        validate(segment)
+
+
+def test_wrong_gripper_unit_is_rejected():
+    segment = make_segment()
+    object.__setattr__(segment.gripper, "unit", "cm")
+    with pytest.raises(ValueError, match="gripper unit must be 'm'"):
+        validate(segment)
+
+
+@pytest.mark.parametrize(
+    "opening_m",
+    [math.nan, math.inf, True, None, "0.02"],
+)
+def test_malformed_gripper_opening_is_rejected(opening_m):
+    segment = make_segment(opening_m=opening_m)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="opening_m must be a finite number"):
+        validate(segment)
+
+
+@pytest.mark.parametrize(
+    ("position_m", "name"),
+    [
+        ((0.0, 0.0, 0.51), "z position"),
+        ((0.0, 0.0, -0.01), "z position"),
+        ((0.51, 0.0, 0.25), "x position"),
+    ],
+)
+def test_target_outside_workspace_is_rejected(position_m, name):
+    with pytest.raises(ValueError, match=name):
+        validate(make_segment(position_m=position_m))
+
+
+@pytest.mark.parametrize(
+    "opening_m",
+    [LIMITS.gripper_opening_lower_m - 0.001, LIMITS.gripper_opening_upper_m + 0.001],
+)
+def test_gripper_opening_outside_bounds_is_rejected(opening_m):
+    with pytest.raises(ValueError, match="gripper opening outside"):
+        validate(make_segment(opening_m=opening_m))
+
+
+def test_translation_delta_above_step_limit_is_rejected():
+    with pytest.raises(ValueError, match="translation delta"):
+        validate(
+            make_segment(position_m=(0.081, 0.0, 0.25)),
+        )
+
+
+def test_rotation_delta_above_step_limit_is_rejected():
+    half = math.sqrt(0.5)
+    quarter_turn = (half, 0.0, 0.0, half)
+    with pytest.raises(ValueError, match="rotation delta"):
+        validate(make_segment(orientation_wxyz=quarter_turn))
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "name"),
+    [
+        ({"workspace_upper_m": (-0.5, 0.5, 0.5)}, "workspace"),
+        ({"gripper_opening_upper_m": -0.1}, "gripper opening"),
+        ({"max_translation_step_m": 0.0}, "max_translation_step_m"),
+        ({"max_rotation_step_rad": math.pi + 0.1}, "must not exceed pi"),
+        ({"max_horizon_s": math.inf}, "max_horizon_s"),
+        ({"workspace_frame": ""}, "workspace_frame"),
+    ],
+)
+def test_invalid_limits_configuration_is_rejected(kwargs, name):
+    with pytest.raises(ValueError, match=name):
+        CartesianSafetyLimits(
+            **{
+                "workspace_frame": "robot_base",
+                "workspace_lower_m": (-0.5, -0.5, 0.0),
+                "workspace_upper_m": (0.5, 0.5, 0.5),
+                "gripper_opening_lower_m": 0.0,
+                "gripper_opening_upper_m": 0.05,
+                "max_translation_step_m": 0.08,
+                "max_rotation_step_rad": 0.2,
+                "max_horizon_s": 1.0,
+                **kwargs,
+            }
+        )
+
+
+def test_validator_returns_none_and_sends_nothing():
+    assert validate(make_segment()) is None
