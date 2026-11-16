@@ -3,6 +3,7 @@ import math
 import pytest
 
 from simready.robotics.cartesian_actions import (
+    CartesianEefObservation,
     CartesianEefTarget,
     CartesianSafetyLimits,
     GripperTarget,
@@ -12,6 +13,7 @@ from simready.robotics.cartesian_actions import (
 
 NOW = 10_000_000_000
 IDENTITY_WXYZ = (1.0, 0.0, 0.0, 0.0)
+MAX_OBSERVATION_AGE_S = 0.2
 
 LIMITS = CartesianSafetyLimits(
     workspace_frame="robot_base",
@@ -27,6 +29,10 @@ CURRENT = CartesianEefTarget(
     frame="robot_base",
     position_m=(0.0, 0.0, 0.25),
     orientation_wxyz=IDENTITY_WXYZ,
+)
+CURRENT_OBSERVATION = CartesianEefObservation(
+    target=CURRENT,
+    received_monotonic_ns=NOW,
 )
 
 
@@ -55,18 +61,31 @@ def make_segment(
     )
 
 
+def make_observation(
+    *,
+    received_monotonic_ns: int = NOW,
+    target: CartesianEefTarget = CURRENT,
+) -> CartesianEefObservation:
+    return CartesianEefObservation(
+        target=target,
+        received_monotonic_ns=received_monotonic_ns,
+    )
+
+
 def validate(
     segment: TimedActionSegment,
     *,
     limits: CartesianSafetyLimits = LIMITS,
-    current_eef: CartesianEefTarget = CURRENT,
+    current_observation: CartesianEefObservation = CURRENT_OBSERVATION,
+    max_observation_age_s: float = MAX_OBSERVATION_AGE_S,
     now_monotonic_ns: int = NOW,
     last_sequence: int | None = None,
 ) -> None:
     validate_cartesian_action_segment(
         limits,
         segment,
-        current_eef=current_eef,
+        current_observation=current_observation,
+        max_observation_age_s=max_observation_age_s,
         now_monotonic_ns=now_monotonic_ns,
         last_sequence=last_sequence,
     )
@@ -235,31 +254,65 @@ def test_negated_quaternion_is_the_same_orientation():
     validate(segment)
 
 
-def test_malformed_current_eef_is_rejected():
-    with pytest.raises(ValueError, match="current_eef must be CartesianEefTarget"):
-        validate(make_segment(), current_eef=object())  # type: ignore[arg-type]
+def test_malformed_current_observation_is_rejected():
+    with pytest.raises(
+        ValueError, match="current_observation must be CartesianEefObservation"
+    ):
+        validate(make_segment(), current_observation=object())  # type: ignore[arg-type]
 
 
-def test_current_eef_wrong_frame_is_rejected():
+def test_current_observation_wrong_frame_is_rejected():
     current = CartesianEefTarget(
         frame="world",
         position_m=CURRENT.position_m,
         orientation_wxyz=IDENTITY_WXYZ,
     )
-    with pytest.raises(ValueError, match="current_eef frame"):
-        validate(make_segment(), current_eef=current)
+    with pytest.raises(ValueError, match="current_observation frame"):
+        validate(make_segment(), current_observation=make_observation(target=current))
 
 
-def test_current_eef_denormalized_quaternion_is_rejected():
+def test_current_observation_denormalized_quaternion_is_rejected():
     current = CartesianEefTarget(
         frame="robot_base",
         position_m=CURRENT.position_m,
         orientation_wxyz=(0.5, 0.0, 0.0, 0.0),
     )
     with pytest.raises(
-        ValueError, match="current_eef orientation_wxyz must be normalized"
+        ValueError, match="current_observation orientation_wxyz must be normalized"
     ):
-        validate(make_segment(), current_eef=current)
+        validate(make_segment(), current_observation=make_observation(target=current))
+
+
+@pytest.mark.parametrize("received_monotonic_ns", [True, 0.5, None])
+def test_malformed_observation_timestamp_is_rejected(received_monotonic_ns):
+    observation = make_observation(received_monotonic_ns=received_monotonic_ns)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="received_monotonic_ns must be an integer"):
+        validate(make_segment(), current_observation=observation)
+
+
+@pytest.mark.parametrize("max_observation_age_s", [0.0, -0.1, math.inf, math.nan])
+def test_malformed_max_observation_age_is_rejected(max_observation_age_s):
+    with pytest.raises(ValueError, match="max_observation_age_s must be"):
+        validate(make_segment(), max_observation_age_s=max_observation_age_s)  # type: ignore[arg-type]
+
+
+def test_stale_current_observation_is_rejected():
+    stale_ns = NOW - int((MAX_OBSERVATION_AGE_S + 0.1) * 1_000_000_000)
+    observation = make_observation(received_monotonic_ns=stale_ns)
+    with pytest.raises(ValueError, match="observation is stale or from the future"):
+        validate(make_segment(), current_observation=observation)
+
+
+def test_future_current_observation_is_rejected():
+    observation = make_observation(received_monotonic_ns=NOW + 1)
+    with pytest.raises(ValueError, match="observation is stale or from the future"):
+        validate(make_segment(), current_observation=observation)
+
+
+def test_current_observation_at_max_age_boundary_is_accepted():
+    boundary_ns = NOW - int(MAX_OBSERVATION_AGE_S * 1_000_000_000)
+    observation = make_observation(received_monotonic_ns=boundary_ns)
+    validate(make_segment(), current_observation=observation)
 
 
 def test_malformed_gripper_target_is_rejected():

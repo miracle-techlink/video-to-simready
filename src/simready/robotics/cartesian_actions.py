@@ -2,6 +2,8 @@
 
 This module validates action proposals only. It does not provide inverse
 kinematics, collision checking, trajectory generation, or robot execution.
+Per-step deltas are measured against a timestamped EEF observation whose
+age must be within an explicitly configured maximum.
 """
 
 from __future__ import annotations
@@ -29,6 +31,14 @@ class GripperTarget:
 
     opening_m: float
     unit: str = "m"
+
+
+@dataclass(frozen=True)
+class CartesianEefObservation:
+    """A measured EEF pose with the local receipt time of that measurement."""
+
+    target: CartesianEefTarget
+    received_monotonic_ns: int
 
 
 @dataclass(frozen=True)
@@ -85,7 +95,8 @@ def validate_cartesian_action_segment(
     limits: CartesianSafetyLimits,
     segment: TimedActionSegment,
     *,
-    current_eef: CartesianEefTarget,
+    current_observation: CartesianEefObservation,
+    max_observation_age_s: float,
     now_monotonic_ns: int,
     last_sequence: int | None,
 ) -> None:
@@ -124,11 +135,25 @@ def validate_cartesian_action_segment(
             f"Cartesian action segment expired or from the future: age_ns={age_ns}"
         )
 
+    if not isinstance(current_observation, CartesianEefObservation):
+        raise ValueError("current_observation must be CartesianEefObservation")
+    observation_age_s = _positive_finite(max_observation_age_s, "max_observation_age_s")
+    if not isinstance(current_observation.received_monotonic_ns, int) or isinstance(
+        current_observation.received_monotonic_ns, bool
+    ):
+        raise ValueError("current_observation received_monotonic_ns must be an integer")
+    observation_age_ns = now_monotonic_ns - current_observation.received_monotonic_ns
+    if observation_age_ns < 0 or observation_age_ns > observation_age_s * 1_000_000_000:
+        raise ValueError(
+            "current EEF observation is stale or from the future: "
+            f"age_ns={observation_age_ns}"
+        )
+
     target_position, target_orientation = _validate_eef_target(
         segment.target, limits.workspace_frame, "segment target"
     )
     current_position, current_orientation = _validate_eef_target(
-        current_eef, limits.workspace_frame, "current_eef"
+        current_observation.target, limits.workspace_frame, "current_observation"
     )
     gripper_opening = _validate_gripper_target(segment.gripper)
 
