@@ -13,8 +13,10 @@ the worker environment. Configuration errors and API failures fail closed.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
@@ -137,6 +139,7 @@ class QwenPolicyProvider:
         observation: Mapping[str, Any],
         tools: Sequence[Mapping[str, Any]],
         history: Sequence[Mapping[str, Any]] = (),
+        image_data_urls: Sequence[str] = (),
     ) -> PolicyDecision:
         """Request and parse one decision from the Qwen endpoint.
 
@@ -151,6 +154,15 @@ class QwenPolicyProvider:
             if not isinstance(message, Mapping):
                 raise ValueError("history entries must be mappings")
         known_tools = _validate_tools(tools)
+        image_blocks = _image_content_blocks(image_data_urls)
+
+        observation_text = json.dumps(observation, default=str, sort_keys=True)
+        user_content: str | list[dict[str, Any]] = observation_text
+        if image_blocks:
+            user_content = [
+                {"type": "text", "text": observation_text},
+                *image_blocks,
+            ]
 
         base_url, model, api_key = self._resolve_environment()
         body = {
@@ -163,7 +175,7 @@ class QwenPolicyProvider:
                 *history,
                 {
                     "role": "user",
-                    "content": json.dumps(observation, default=str, sort_keys=True),
+                    "content": user_content,
                 },
             ],
             "tools": list(tools),
@@ -203,6 +215,41 @@ class QwenPolicyProvider:
         if not base_url.startswith(("https://", "http://")):
             raise QwenConfigError(f"{config.base_url_env} must be an http(s) URL")
         return base_url, model, api_key
+
+
+_MAX_IMAGE_DATA_URLS = 4
+_MAX_IMAGE_BYTES = 10 * 1024 * 1024
+_DATA_IMAGE_PATTERN = re.compile(
+    r"^data:image/(?:png|jpeg|webp);base64,([A-Za-z0-9+/]*={0,2})$"
+)
+
+
+def _image_content_blocks(image_data_urls: Sequence[str]) -> list[dict[str, Any]]:
+    """Build OpenAI-compatible vision content from caller-provided data URLs.
+
+    The caller reads/encodes camera frames; this provider never follows local
+    paths or remote URLs. That keeps filesystem access and image acquisition
+    outside the credential-bearing API client.
+    """
+    if len(image_data_urls) > _MAX_IMAGE_DATA_URLS:
+        raise ValueError(f"at most {_MAX_IMAGE_DATA_URLS} images may be sent")
+    blocks: list[dict[str, Any]] = []
+    for image in image_data_urls:
+        if not isinstance(image, str):
+            raise ValueError("image observations must be base64 data URLs")
+        match = _DATA_IMAGE_PATTERN.fullmatch(image)
+        if not match:
+            raise ValueError(
+                "image observations must use PNG/JPEG/WEBP base64 data URLs"
+            )
+        try:
+            decoded = base64.b64decode(match.group(1), validate=True)
+        except ValueError as error:
+            raise ValueError("image data URL has invalid base64") from error
+        if not decoded or len(decoded) > _MAX_IMAGE_BYTES:
+            raise ValueError("image data URL is empty or exceeds the 10 MiB limit")
+        blocks.append({"type": "image_url", "image_url": {"url": image}})
+    return blocks
 
 
 def _urllib_post_json(

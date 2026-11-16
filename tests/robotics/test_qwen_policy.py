@@ -120,6 +120,57 @@ def test_valid_tool_call_is_parsed_as_typed_data(env):
     assert TEST_KEY not in request["body"]["messages"][-1]["content"]
 
 
+def test_image_observation_is_sent_as_multimodal_content_not_path_text(env):
+    transport = _FakeTransport(_tool_call_response("move_ee", '{"x": 0.25}'))
+    image = "data:image/png;base64,YWJj"
+    _provider(transport).decide(
+        instructions="Inspect this camera frame.",
+        observation={"joint_positions": {"j1": 0.0}, "rgb_path": "/private/frame.png"},
+        image_data_urls=[image],
+        tools=TOOLS,
+    )
+    content = transport.seen[0]["body"]["messages"][-1]["content"]
+    assert isinstance(content, list)
+    assert content[0]["type"] == "text"
+    assert '"rgb_path": "/private/frame.png"' in content[0]["text"]
+    assert content[1] == {"type": "image_url", "image_url": {"url": image}}
+
+
+@pytest.mark.parametrize(
+    "images",
+    [
+        ["/tmp/frame.png"],
+        ["https://example.test/frame.png"],
+        ["data:image/png;base64,%%%"],
+        ["data:image/gif;base64,YWJj"],
+        ["data:image/png;base64,"],
+    ],
+)
+def test_invalid_image_observation_is_rejected_before_request(env, images):
+    transport = _FakeTransport(_tool_call_response("move_ee", '{"x": 0.25}'))
+    with pytest.raises(ValueError, match="image"):
+        _provider(transport).decide(
+            instructions="Inspect this camera frame.",
+            observation=OBSERVATION,
+            image_data_urls=images,
+            tools=TOOLS,
+        )
+    assert transport.seen == []
+
+
+def test_image_count_is_bounded(env):
+    transport = _FakeTransport(_tool_call_response("move_ee", '{"x": 0.25}'))
+    images = ["data:image/png;base64,YWJj"] * 5
+    with pytest.raises(ValueError, match="at most 4"):
+        _provider(transport).decide(
+            instructions="Inspect these camera frames.",
+            observation=OBSERVATION,
+            image_data_urls=images,
+            tools=TOOLS,
+        )
+    assert transport.seen == []
+
+
 def test_history_is_forwarded_between_system_and_observation(env):
     transport = _FakeTransport(
         {"choices": [{"finish_reason": "stop", "message": {"role": "assistant"}}]}

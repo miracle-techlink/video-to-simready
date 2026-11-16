@@ -11,6 +11,13 @@ It deliberately does **not** execute tools, import an adapter, connect to a
 robot, validate a robot command, or make an actuation decision. Deterministic
 policy/safety code must validate and execute any accepted action separately.
 
+For visual observations, pass caller-encoded `data:image/png;base64,...`,
+`data:image/jpeg;base64,...`, or WebP data URLs through `image_data_urls`.
+The provider adds OpenAI-compatible image content blocks to the user message;
+it does not open file paths or fetch URLs. A request accepts at most four
+images, each no larger than 10 MiB. Whether the configured Qwen model/endpoint
+supports image input together with tool calls still requires the server smoke.
+
 ## Configuration and failures
 
 The default environment-variable names are `QWEN_BASE_URL`, `QWEN_MODEL`, and
@@ -26,17 +33,15 @@ from the caller schema. A no-tool model response is represented as
 
 ## Verification
 
-Mocked CPU tests cover valid typed calls, malformed arguments, unknown tools,
-timeouts, API errors, refusals, configurable env names, input/schema failures,
-and the no-execution/no-adapter invariant.
+Mocked CPU tests cover valid typed calls, multimodal image serialization,
+invalid image inputs, unknown tools, timeouts, API errors, refusals, configurable
+env names, input/schema failures, and the no-execution/no-adapter invariant.
 
-- `PYTHONPATH=src python -m pytest tests/robotics -q`: PASS (21 tests)
-- `PYTHONPATH=src python -m pytest -q -m "not real_model and not gpu"`: PASS
-  (1379 passed, 1 skipped, 20 deselected)
-- `ruff check src/simready tests examples scripts deploy`: PASS
-- `ruff format --check src/simready tests examples scripts deploy`: PASS
-  (with one pre-existing invalid-noqa warning)
-- `python scripts/check_architecture.py`: PASS
+- `PYTHONPATH=src python -m pytest -q tests/robotics/test_qwen_policy.py`:
+  PASS (23 tests after multimodal review fix)
+- The module author's initial commit reported a full CPU test run (1379 passed,
+  1 skipped, 20 deselected) before the multimodal follow-up; the full suite has
+  not yet been rerun after that follow-up.
 
 ## Server smoke
 
@@ -44,6 +49,7 @@ Status: **NOT_RUN**. The server/worker presence-only probe found no configured
 `QWEN_*` or `DASHSCOPE_*` endpoint, model, or credential variable names. No
 values were read, no request was sent, no image was submitted, no GPU was used,
 and no tool or robot action occurred. Therefore model ID, image-input support,
-function-call support, and latency are all not measured.
+function-call support, and latency are all not measured. The provider accepts
+multimodal requests, but live endpoint compatibility is not yet verified.
 
 Redacted evidence: `/home/nvidia/algotithm/.simready-collaboration/robot-adapters-20261116/policy-qwen/env-presence-probe.json`.
