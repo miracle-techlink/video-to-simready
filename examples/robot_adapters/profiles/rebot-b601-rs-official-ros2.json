@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "kind": "robot_profile",
+  "robot_id": "seeed_rebot_b601_rs_official_ros2",
+  "display_name": "Seeed reBot Arm B601-RS (official ROS 2 driver, uncommissioned)",
+  "profile_revision": "2",
+  "asset_reference": "https://github.com/Seeed-Projects/reBotArmController_ROS2/blob/87780c6a5c2fb43b55ddebda5eac375ceb9c5a40/src/rebotarm_bringup/description/RS/urdf/ReBot_Arm_RS.urdf",
+  "source_reference": "https://github.com/Seeed-Projects/reBotArmController_ROS2/tree/87780c6a5c2fb43b55ddebda5eac375ceb9c5a40",
+  "state_transport": "ros2:sensor_msgs/msg/JointState:/rebotarm/joint_states",
+  "groups": {
+    "arm": ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"],
+    "gripper": ["gripper_joint1", "gripper_joint2"]
+  },
+  "joints": [
+    {"name": "joint1", "group": "arm", "unit": "rad", "lower": -2.8, "upper": 2.8},
+    {"name": "joint2", "group": "arm", "unit": "rad", "lower": 0.0, "upper": 3.14},
+    {"name": "joint3", "group": "arm", "unit": "rad", "lower": 0.0, "upper": 3.14},
+    {"name": "joint4", "group": "arm", "unit": "rad", "lower": -1.57, "upper": 1.57},
+    {"name": "joint5", "group": "arm", "unit": "rad", "lower": -1.57, "upper": 1.57},
+    {"name": "joint6", "group": "arm", "unit": "rad", "lower": -3.14, "upper": 3.14},
+    {"name": "gripper_joint1", "group": "gripper", "unit": "m", "lower": 0.0, "upper": 0.05},
+    {"name": "gripper_joint2", "group": "gripper", "unit": "m", "lower": 0.0, "upper": 0.0715}
+  ],
+  "transport": {
+    "simulation": {
+      "command": null,
+      "notes": "No simulation transport is declared by this official-hardware profile. The separate rebot-b601-rs.json profile remains the Isaac/community-driver profile."
+    },
+    "hardware": {
+      "command": null,
+      "verified": false,
+      "notes": "The official driver source documents interfaces, but no live ROS graph or physical robot was observed. Hardware commands are deliberately unset and rejected by the common contract."
+    }
+  }
+}
