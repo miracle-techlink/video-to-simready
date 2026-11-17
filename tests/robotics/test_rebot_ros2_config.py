@@ -152,7 +152,7 @@ def test_official_profile_rejects_gripper_finger_out_of_stroke():
         received_monotonic_ns=now,
         source="config-test",
     )
-    with pytest.raises(ValueError, match="gripper_joint2' value 0.08 outside"):
+    with pytest.raises(ValueError, match="gripper_joint2' measured value 0.08 outside"):
         validate_robot_state(profile, state, now_monotonic_ns=now, max_age_s=0.1)
 
 
