@@ -55,6 +55,33 @@ success verifier is independent of the model's `done` response.
    one-step joint move. Codex performs integration review and reports gates as
    PASS / FAIL / BLOCKED / NOT_RUN with evidence.
 
+## 2026-11-17 integrated CPU acceptance
+
+Integrated on `feat/robot-adapters` after isolated review:
+
+- Module A — **PASS (CPU/mock)**: Qwen typed tool-call provider; image data URLs are sent as multimodal API blocks; no execution or adapter imports. Live server smoke is **NOT_RUN** because the configured Spark endpoint currently returns HTTP 502 and no authorized replacement endpoint/model configuration is available.
+- Module B — **PASS (CPU)**: canonical external Cartesian action contract uses `orientation_xyzw` and normalized `opening_fraction` (`0.0` closed, `1.0` open). Fresh observation, expiration, workspace, action horizon, sequence, and bounded step rejection tests pass.
+- Module C — **PASS (CPU contract), BLOCKED (live Isaac ROS 2)**: injected fake transport confirms the `FollowJointTrajectory` client/state normalization behavior; no live Isaac `ros2_control` action result has been recorded.
+- Module D — **PASS (CPU/profile), NOT_RUN (hardware)**: the official reBot profile carries the six arm and two state-only finger joints. Both command transports remain `null`; `hardware_verified=false`, so hardware dispatch is fail-closed.
+
+Verification run from this branch:
+
+```bash
+PYTHONPATH=src python -m pytest -q tests/robotics
+# 140 passed
+PYTHONPATH=src python -m pytest -q -m 'not real_model and not gpu'
+# 1498 passed, 1 skipped, 20 deselected
+ruff check src/simready tests/robotics examples/robot_adapters
+ruff format --check src/simready tests/robotics examples/robot_adapters
+python scripts/check_architecture.py
+# Architecture PASS: 9 domains, 17 public functions
+```
+
+The unqualified `python -m pytest` invocation is not an acceptance command in
+this source-layout checkout: it lacks `PYTHONPATH=src` and fails robotics test
+collection. This is an environment invocation issue, not a product-test
+failure; the project acceptance command above is authoritative.
+
 ## Evidence required per executed action
 
 Record source commit, robot profile hash, observation timestamp and image hash,
