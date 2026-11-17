@@ -33,6 +33,9 @@ def robot_profile_from_dict(document: dict[str, Any]) -> RobotProfile:
         )
         for item in document["joints"]
     )
+    commandable = document.get("commandable_groups")
+    if commandable is not None and not isinstance(commandable, list):
+        raise ValueError("commandable_groups must be a list of group names")
     return RobotProfile(
         robot_id=document["robot_id"],
         display_name=document["display_name"],
@@ -42,6 +45,7 @@ def robot_profile_from_dict(document: dict[str, Any]) -> RobotProfile:
         simulation_command_transport=simulation["command"],
         hardware_command_transport=hardware.get("command"),
         hardware_verified=hardware.get("verified", False),
+        commandable_groups=tuple(commandable) if commandable is not None else None,
         asset_reference=document.get("asset_reference"),
         source_reference=document.get("source_reference"),
     )

@@ -50,6 +50,44 @@ def test_genie_sim_profile_does_not_claim_hardware_command():
     assert profile.hardware_verified is False
 
 
+def test_commandable_groups_gate_and_backwards_compatibility():
+    # A profile without commandable_groups keeps allowing all declared groups.
+    permissive = load_robot_profile(PROFILES / "rebot-b601-rs.json")
+    assert permissive.commandable_groups is None
+    assert permissive.group_is_commandable("arm")
+    assert permissive.group_is_commandable("gripper")
+
+    # A restricted profile only allows its whitelisted groups.
+    restricted = load_robot_profile(PROFILES / "rebot-b601-rs-official-ros2.json")
+    assert restricted.commandable_groups == ("arm",)
+    assert restricted.group_is_commandable("arm")
+    assert not restricted.group_is_commandable("gripper")
+
+    # Unknown or duplicate names are rejected at construction time.
+    from simready.robotics import JointSpec, RobotProfile
+
+    with pytest.raises(ValueError, match="commandable_groups names unknown groups"):
+        RobotProfile(
+            robot_id="bad",
+            display_name="bad",
+            joints=(JointSpec("j1", "arm", "rad"),),
+            groups={"arm": ("j1",)},
+            state_transport="test",
+            simulation_command_transport="test",
+            commandable_groups=("tail",),
+        )
+    with pytest.raises(ValueError, match="commandable_groups must not contain"):
+        RobotProfile(
+            robot_id="bad",
+            display_name="bad",
+            joints=(JointSpec("j1", "arm", "rad"),),
+            groups={"arm": ("j1",)},
+            state_transport="test",
+            simulation_command_transport="test",
+            commandable_groups=("arm", "arm"),
+        )
+
+
 def test_profile_rejects_joint_group_disagreement():
     from simready.robotics import JointSpec, RobotProfile
 

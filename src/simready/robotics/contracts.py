@@ -45,6 +45,7 @@ class RobotProfile:
     simulation_command_transport: str
     hardware_command_transport: str | None = None
     hardware_verified: bool = False
+    commandable_groups: tuple[str, ...] | None = None
     asset_reference: str | None = None
     source_reference: str | None = None
 
@@ -82,10 +83,23 @@ class RobotProfile:
             raise ValueError(
                 f"every joint must belong to one group; missing={sorted(declared - grouped)}"
             )
+        if self.commandable_groups is not None:
+            unknown_commandable = set(self.commandable_groups) - set(self.groups)
+            if unknown_commandable:
+                raise ValueError(
+                    "commandable_groups names unknown groups: "
+                    f"{sorted(unknown_commandable)}"
+                )
+            if len(self.commandable_groups) != len(set(self.commandable_groups)):
+                raise ValueError("commandable_groups must not contain duplicates")
         if self.hardware_verified and not self.hardware_command_transport:
             raise ValueError(
                 "verified hardware profile must declare a command transport"
             )
+
+    def group_is_commandable(self, group: str) -> bool:
+        """Whether this profile permits commands for ``group`` at any backend."""
+        return self.commandable_groups is None or group in self.commandable_groups
 
     def joint_map(self) -> dict[str, JointSpec]:
         return {joint.name: joint for joint in self.joints}
@@ -254,6 +268,10 @@ def validate_joint_command(
     """Reject expired, malformed, out-of-limit, or uncommissioned commands."""
     if hardware and not profile.hardware_verified:
         raise ValueError(f"hardware commands are disabled for {profile.robot_id}")
+    if not profile.group_is_commandable(command.group):
+        raise ValueError(
+            f"joint group {command.group!r} is not commandable for {profile.robot_id}"
+        )
     if not math.isfinite(command.valid_for_s) or command.valid_for_s <= 0:
         raise ValueError("command valid_for_s must be a positive finite duration")
     if command.sequence < 0:

@@ -121,6 +121,24 @@ def test_official_profile_contract_accepts_arm_state_and_rejects_hardware():
         validate_joint_command(profile, command, now_monotonic_ns=now, hardware=True)
 
 
+def test_official_profile_rejects_gripper_commands_in_software_mode():
+    """The gripper motor command interface is uncommissioned, so the profile
+    declares commandable_groups=["arm"] and gripper group commands must be
+    rejected even in software/simulation mode, not only hardware mode."""
+    profile = load_robot_profile(OFFICIAL_PROFILE)
+    assert profile.commandable_groups == ("arm",)
+    now = 10_000_000_000
+    gripper_command = JointCommand(
+        group="gripper",
+        positions={joint: 0.02 for joint in OFFICIAL_GRIPPER_JOINTS},
+        issued_monotonic_ns=now,
+        valid_for_s=0.1,
+        sequence=3,
+    )
+    with pytest.raises(ValueError, match="not commandable"):
+        validate_joint_command(profile, gripper_command, now_monotonic_ns=now)
+
+
 def test_official_profile_accepts_full_eight_joint_driver_state_sample():
     """The real /rebotarm/joint_states message carries six arm joints plus
     the two appended RS gripper finger joints (hardware_manager.py +

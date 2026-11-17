@@ -11,6 +11,7 @@
     "arm": ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"],
     "gripper": ["gripper_joint1", "gripper_joint2"]
   },
+  "commandable_groups": ["arm"],
   "joints": [
     {"name": "joint1", "group": "arm", "unit": "rad", "lower": -2.8, "upper": 2.8},
     {"name": "joint2", "group": "arm", "unit": "rad", "lower": 0.0, "upper": 3.14},
