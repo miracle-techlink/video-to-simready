@@ -16,21 +16,20 @@ _QUATERNION_NORM_TOLERANCE = 1e-6
 
 @dataclass(frozen=True)
 class CartesianEefTarget:
-    """An EEF pose expressed in metres and a normalized ``wxyz`` quaternion."""
+    """An EEF pose expressed in metres and a normalized ``xyzw`` quaternion."""
 
     frame: str
     position_m: tuple[float, float, float]
-    orientation_wxyz: tuple[float, float, float, float]
+    orientation_xyzw: tuple[float, float, float, float]
     position_unit: str = "m"
-    quaternion_order: str = "wxyz"
+    quaternion_order: str = "xyzw"
 
 
 @dataclass(frozen=True)
 class GripperTarget:
-    """A parallel-jaw gripper aperture expressed in metres."""
+    """A canonical gripper aperture fraction: 0.0 closed, 1.0 fully open."""
 
-    opening_m: float
-    unit: str = "m"
+    opening_fraction: float
 
 
 @dataclass(frozen=True)
@@ -60,8 +59,8 @@ class CartesianSafetyLimits:
     workspace_frame: str
     workspace_lower_m: tuple[float, float, float]
     workspace_upper_m: tuple[float, float, float]
-    gripper_opening_lower_m: float
-    gripper_opening_upper_m: float
+    gripper_opening_lower_fraction: float
+    gripper_opening_upper_fraction: float
     max_translation_step_m: float
     max_rotation_step_rad: float
     max_horizon_s: float
@@ -77,11 +76,13 @@ class CartesianSafetyLimits:
         ):
             raise ValueError("workspace lower bounds must be below upper bounds")
         lower_gripper = _finite_number(
-            self.gripper_opening_lower_m, "gripper_opening_lower_m"
+            self.gripper_opening_lower_fraction, "gripper_opening_lower_fraction"
         )
         upper_gripper = _finite_number(
-            self.gripper_opening_upper_m, "gripper_opening_upper_m"
+            self.gripper_opening_upper_fraction, "gripper_opening_upper_fraction"
         )
+        if not (0.0 <= lower_gripper <= 1.0) or not (0.0 <= upper_gripper <= 1.0):
+            raise ValueError("gripper opening fractions must lie within [0, 1]")
         if lower_gripper >= upper_gripper:
             raise ValueError("gripper opening lower bound must be below upper bound")
         _positive_finite(self.max_translation_step_m, "max_translation_step_m")
@@ -169,12 +170,13 @@ def validate_cartesian_action_segment(
                 f"segment target {axis} position {value} outside workspace [{lower}, {upper}] m"
             )
     if (
-        gripper_opening < limits.gripper_opening_lower_m
-        or gripper_opening > limits.gripper_opening_upper_m
+        gripper_opening < limits.gripper_opening_lower_fraction
+        or gripper_opening > limits.gripper_opening_upper_fraction
     ):
         raise ValueError(
             "segment gripper opening outside "
-            f"[{limits.gripper_opening_lower_m}, {limits.gripper_opening_upper_m}] m"
+            f"[{limits.gripper_opening_lower_fraction}, "
+            f"{limits.gripper_opening_upper_fraction}]"
         )
 
     translation_delta_m = math.dist(current_position, target_position)
@@ -206,22 +208,25 @@ def _validate_eef_target(
         )
     if target.position_unit != "m":
         raise ValueError(f"{label} position_unit must be 'm'")
-    if target.quaternion_order != "wxyz":
-        raise ValueError(f"{label} quaternion_order must be 'wxyz'")
+    if target.quaternion_order != "xyzw":
+        raise ValueError(f"{label} quaternion_order must be 'xyzw'")
     position = _vector(target.position_m, f"{label} position_m", 3)
-    orientation = _vector(target.orientation_wxyz, f"{label} orientation_wxyz", 4)
+    orientation = _vector(target.orientation_xyzw, f"{label} orientation_xyzw", 4)
     norm = math.sqrt(sum(value * value for value in orientation))
     if abs(norm - 1.0) > _QUATERNION_NORM_TOLERANCE:
-        raise ValueError(f"{label} orientation_wxyz must be normalized")
+        raise ValueError(f"{label} orientation_xyzw must be normalized")
     return position, orientation
 
 
 def _validate_gripper_target(target: object) -> float:
     if not isinstance(target, GripperTarget):
         raise ValueError("segment gripper must be GripperTarget")
-    if target.unit != "m":
-        raise ValueError("segment gripper unit must be 'm'")
-    return _finite_number(target.opening_m, "segment gripper opening_m")
+    fraction = _finite_number(
+        target.opening_fraction, "segment gripper opening_fraction"
+    )
+    if not 0.0 <= fraction <= 1.0:
+        raise ValueError("segment gripper opening_fraction must lie within [0, 1]")
+    return fraction
 
 
 def _quaternion_distance(

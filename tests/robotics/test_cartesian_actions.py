@@ -12,15 +12,15 @@ from simready.robotics.cartesian_actions import (
 )
 
 NOW = 10_000_000_000
-IDENTITY_WXYZ = (1.0, 0.0, 0.0, 0.0)
+IDENTITY_XYZW = (1.0, 0.0, 0.0, 0.0)
 MAX_OBSERVATION_AGE_S = 0.2
 
 LIMITS = CartesianSafetyLimits(
     workspace_frame="robot_base",
     workspace_lower_m=(-0.5, -0.5, 0.0),
     workspace_upper_m=(0.5, 0.5, 0.5),
-    gripper_opening_lower_m=0.0,
-    gripper_opening_upper_m=0.05,
+    gripper_opening_lower_fraction=0.0,
+    gripper_opening_upper_fraction=0.35,
     max_translation_step_m=0.08,
     max_rotation_step_rad=0.2,
     max_horizon_s=1.0,
@@ -28,7 +28,7 @@ LIMITS = CartesianSafetyLimits(
 CURRENT = CartesianEefTarget(
     frame="robot_base",
     position_m=(0.0, 0.0, 0.25),
-    orientation_wxyz=IDENTITY_WXYZ,
+    orientation_xyzw=IDENTITY_XYZW,
 )
 CURRENT_OBSERVATION = CartesianEefObservation(
     target=CURRENT,
@@ -40,9 +40,9 @@ def make_segment(
     *,
     sequence: int = 1,
     position_m: tuple[float, float, float] = (0.0, 0.0, 0.25),
-    orientation_wxyz: tuple[float, float, float, float] = IDENTITY_WXYZ,
+    orientation_xyzw: tuple[float, float, float, float] = IDENTITY_XYZW,
     frame: str = "robot_base",
-    opening_m: float = 0.02,
+    opening_fraction: float = 0.02,
     issued_monotonic_ns: int = NOW,
     valid_for_s: float = 0.5,
     duration_s: float = 0.2,
@@ -51,9 +51,9 @@ def make_segment(
         target=CartesianEefTarget(
             frame=frame,
             position_m=position_m,
-            orientation_wxyz=orientation_wxyz,
+            orientation_xyzw=orientation_xyzw,
         ),
-        gripper=GripperTarget(opening_m=opening_m),
+        gripper=GripperTarget(opening_fraction=opening_fraction),
         issued_monotonic_ns=issued_monotonic_ns,
         valid_for_s=valid_for_s,
         duration_s=duration_s,
@@ -94,7 +94,7 @@ def validate(
 def test_valid_segment_on_inclusive_boundary_is_accepted():
     segment = make_segment(
         position_m=(0.08, 0.0, 0.25),
-        opening_m=LIMITS.gripper_opening_upper_m,
+        opening_fraction=LIMITS.gripper_opening_upper_fraction,
         sequence=7,
     )
     validate(segment, last_sequence=6)
@@ -213,8 +213,8 @@ def test_wrong_position_unit_is_rejected():
 
 def test_wrong_quaternion_order_is_rejected():
     segment = make_segment()
-    object.__setattr__(segment.target, "quaternion_order", "xyzw")
-    with pytest.raises(ValueError, match="quaternion_order must be 'wxyz'"):
+    object.__setattr__(segment.target, "quaternion_order", "wxyz")
+    with pytest.raises(ValueError, match="quaternion_order must be 'xyzw'"):
         validate(segment)
 
 
@@ -233,22 +233,22 @@ def test_malformed_target_position_is_rejected(position_m, name):
 
 
 @pytest.mark.parametrize(
-    ("orientation_wxyz", "name"),
+    ("orientation_xyzw", "name"),
     [
-        ((1.0, 0.0, 0.0), "orientation_wxyz must be a tuple of 4"),
-        ([1.0, 0.0, 0.0, 0.0], "orientation_wxyz must be a tuple of 4"),
+        ((1.0, 0.0, 0.0), "orientation_xyzw must be a tuple of 4"),
+        ([1.0, 0.0, 0.0, 0.0], "orientation_xyzw must be a tuple of 4"),
         ((1.0, 0.0, 0.0, math.nan), "must be a finite number"),
         ((0.5, 0.0, 0.0, 0.0), "must be normalized"),
     ],
 )
-def test_malformed_target_orientation_is_rejected(orientation_wxyz, name):
+def test_malformed_target_orientation_is_rejected(orientation_xyzw, name):
     with pytest.raises(ValueError, match=name):
-        validate(make_segment(orientation_wxyz=orientation_wxyz))
+        validate(make_segment(orientation_xyzw=orientation_xyzw))
 
 
 def test_negated_quaternion_is_the_same_orientation():
     segment = make_segment(
-        orientation_wxyz=(-1.0, 0.0, 0.0, 0.0),
+        orientation_xyzw=(-1.0, 0.0, 0.0, 0.0),
         position_m=CURRENT.position_m,
     )
     validate(segment)
@@ -265,7 +265,7 @@ def test_current_observation_wrong_frame_is_rejected():
     current = CartesianEefTarget(
         frame="world",
         position_m=CURRENT.position_m,
-        orientation_wxyz=IDENTITY_WXYZ,
+        orientation_xyzw=IDENTITY_XYZW,
     )
     with pytest.raises(ValueError, match="current_observation frame"):
         validate(make_segment(), current_observation=make_observation(target=current))
@@ -275,10 +275,10 @@ def test_current_observation_denormalized_quaternion_is_rejected():
     current = CartesianEefTarget(
         frame="robot_base",
         position_m=CURRENT.position_m,
-        orientation_wxyz=(0.5, 0.0, 0.0, 0.0),
+        orientation_xyzw=(0.5, 0.0, 0.0, 0.0),
     )
     with pytest.raises(
-        ValueError, match="current_observation orientation_wxyz must be normalized"
+        ValueError, match="current_observation orientation_xyzw must be normalized"
     ):
         validate(make_segment(), current_observation=make_observation(target=current))
 
@@ -322,20 +322,19 @@ def test_malformed_gripper_target_is_rejected():
         validate(segment)
 
 
-def test_wrong_gripper_unit_is_rejected():
+def test_gripper_target_has_no_unit_field_anymore():
     segment = make_segment()
-    object.__setattr__(segment.gripper, "unit", "cm")
-    with pytest.raises(ValueError, match="gripper unit must be 'm'"):
-        validate(segment)
+    assert not hasattr(segment.gripper, "unit")
+    assert 0.0 <= segment.gripper.opening_fraction <= 1.0
 
 
 @pytest.mark.parametrize(
-    "opening_m",
+    "opening_fraction",
     [math.nan, math.inf, True, None, "0.02"],
 )
-def test_malformed_gripper_opening_is_rejected(opening_m):
-    segment = make_segment(opening_m=opening_m)  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="opening_m must be a finite number"):
+def test_malformed_gripper_opening_is_rejected(opening_fraction):
+    segment = make_segment(opening_fraction=opening_fraction)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="opening_fraction must be a finite number"):
         validate(segment)
 
 
@@ -353,12 +352,18 @@ def test_target_outside_workspace_is_rejected(position_m, name):
 
 
 @pytest.mark.parametrize(
-    "opening_m",
-    [LIMITS.gripper_opening_lower_m - 0.001, LIMITS.gripper_opening_upper_m + 0.001],
+    "opening_fraction",
+    [
+        -0.001,  # below the canonical [0, 1] domain
+        1.001,  # above the canonical [0, 1] domain
+        0.4,  # inside [0,1] but outside the configured [0, 0.35] task subrange
+    ],
 )
-def test_gripper_opening_outside_bounds_is_rejected(opening_m):
-    with pytest.raises(ValueError, match="gripper opening outside"):
-        validate(make_segment(opening_m=opening_m))
+def test_gripper_opening_outside_bounds_is_rejected(opening_fraction):
+    with pytest.raises(
+        ValueError, match="opening_fraction must lie within|gripper opening outside"
+    ):
+        validate(make_segment(opening_fraction=opening_fraction))
 
 
 def test_translation_delta_above_step_limit_is_rejected():
@@ -372,14 +377,14 @@ def test_rotation_delta_above_step_limit_is_rejected():
     half = math.sqrt(0.5)
     quarter_turn = (half, 0.0, 0.0, half)
     with pytest.raises(ValueError, match="rotation delta"):
-        validate(make_segment(orientation_wxyz=quarter_turn))
+        validate(make_segment(orientation_xyzw=quarter_turn))
 
 
 @pytest.mark.parametrize(
     ("kwargs", "name"),
     [
         ({"workspace_upper_m": (-0.5, 0.5, 0.5)}, "workspace"),
-        ({"gripper_opening_upper_m": -0.1}, "gripper opening"),
+        ({"gripper_opening_upper_fraction": -0.1}, "must lie within"),
         ({"max_translation_step_m": 0.0}, "max_translation_step_m"),
         ({"max_rotation_step_rad": math.pi + 0.1}, "must not exceed pi"),
         ({"max_horizon_s": math.inf}, "max_horizon_s"),
@@ -393,8 +398,8 @@ def test_invalid_limits_configuration_is_rejected(kwargs, name):
                 "workspace_frame": "robot_base",
                 "workspace_lower_m": (-0.5, -0.5, 0.0),
                 "workspace_upper_m": (0.5, 0.5, 0.5),
-                "gripper_opening_lower_m": 0.0,
-                "gripper_opening_upper_m": 0.05,
+                "gripper_opening_lower_fraction": 0.0,
+                "gripper_opening_upper_fraction": 1.0,
                 "max_translation_step_m": 0.08,
                 "max_rotation_step_rad": 0.2,
                 "max_horizon_s": 1.0,
