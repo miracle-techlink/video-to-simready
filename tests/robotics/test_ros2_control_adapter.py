@@ -476,7 +476,9 @@ def test_send_enforces_contract_validation_fail_closed():
     adapter, _, _ = make_adapter(state=joint_state_message(), clock=clock)
     adapter.connect()
     out_of_limit = {name: 0.0 for name in ARM}
-    out_of_limit[ARM[1]] = 3.5  # joint2 upper is 3.14
+    # joint2 lower bound is 0.0; -0.04 stays under the 0.08 delta cap so the
+    # contract-limit check (not the local delta guard) is what must reject it.
+    out_of_limit[ARM[1]] = -0.04
     with pytest.raises(ValueError, match="outside"):
         adapter.send_joint_position(command(out_of_limit, clock=clock))
     expired = command(
