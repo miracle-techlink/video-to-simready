@@ -52,12 +52,18 @@ def test_genie_sim_profile_does_not_claim_hardware_command():
 
 def test_commandable_groups_gate_and_backwards_compatibility():
     # A profile without commandable_groups keeps allowing all declared groups.
-    permissive = load_robot_profile(PROFILES / "rebot-b601-rs.json")
+    permissive = load_robot_profile(PROFILES / "agibot-genie-g2-crsb-sim.json")
     assert permissive.commandable_groups is None
     assert permissive.group_is_commandable("arm")
-    assert permissive.group_is_commandable("gripper")
 
-    # A restricted profile only allows its whitelisted groups.
+    # Both reBot profiles expose state-only finger joints, but only arm motion
+    # may be commanded until an explicit, commissioned gripper adapter exists.
+    community_rebot = load_robot_profile(PROFILES / "rebot-b601-rs.json")
+    assert community_rebot.commandable_groups == ("arm",)
+    assert community_rebot.group_is_commandable("arm")
+    assert not community_rebot.group_is_commandable("gripper")
+
+    # The official profile has the same state-only gripper boundary.
     restricted = load_robot_profile(PROFILES / "rebot-b601-rs-official-ros2.json")
     assert restricted.commandable_groups == ("arm",)
     assert restricted.group_is_commandable("arm")
@@ -134,7 +140,10 @@ def test_measured_limit_noise_is_diagnosed_without_weakening_command_bounds():
         valid_for_s=0.1,
         sequence=1,
     )
-    with pytest.raises(ValueError, match="outside"):
+    # The reBot gripper group is now command-disabled at the profile level, so
+    # the earlier "outside" rejection no longer reaches the numeric bounds; the
+    # capability gate fires first (which is the stricter, intended behaviour).
+    with pytest.raises(ValueError, match="not commandable"):
         validate_joint_command(profile, command, now_monotonic_ns=now)
     with pytest.raises(ValueError, match="more than tolerance"):
         validate_robot_state(
