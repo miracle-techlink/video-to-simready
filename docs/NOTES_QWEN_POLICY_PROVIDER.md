@@ -43,6 +43,10 @@ env names, input/schema failures, and the no-execution/no-adapter invariant.
   1 skipped, 20 deselected) before the multimodal follow-up; the full suite has
   not yet been rerun after that follow-up.
 
+A Messages-API transport for GPT-5.6 models, with strict response model-identity
+checking, is documented separately in
+[NOTES_GPT56_POLICY_TRANSPORT.md](NOTES_GPT56_POLICY_TRANSPORT.md).
+
 ## Server smoke
 
 Status: **BLOCKED / NOT_ACCEPTED**. The configured Spark-compatible endpoint
