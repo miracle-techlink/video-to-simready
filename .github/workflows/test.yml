@@ -70,7 +70,7 @@ jobs:
       - name: Install CPU dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes ffmpeg
+          sudo apt-get install --yes --no-install-recommends ffmpeg
           python -m pip install '.[test,physical-assets]'
           python -c 'from pxr import Usd; print(Usd.GetVersion())'
           ffmpeg -version
