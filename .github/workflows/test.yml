@@ -136,7 +136,7 @@ jobs:
   package:
     name: package-smoke
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -149,7 +149,7 @@ jobs:
       - name: Build and check distribution
         run: |
           sudo apt-get update
-          sudo apt-get install --yes ffmpeg
+          sudo apt-get install --yes --no-install-recommends ffmpeg
           python -m pip install '.[dev]' twine
           python -m build
           python -m twine check dist/*
