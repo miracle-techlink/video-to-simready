@@ -58,7 +58,10 @@ sanitized timeout/HTTP failure:
 PYTHONPATH=src python -m pytest -q tests/robotics/test_gpt56_policy.py
 ```
 
-Server-side mocked robotics suite (GPUFree, 2026-11-18): **182 passed**.
+Server-side mocked robotics suite (GPUFree, 2026-11-18): **182 passed** before
+the review-hardening commit; local mocked robotics after hardening: **189
+passed** (server revalidation of the combined integration commit is tracked
+separately in the integration acceptance handoff).
 
 Live acceptance is an external, credential-bearing operational script, not a
 library file. It reads the local IAS sqlite configuration read-only, forwards
