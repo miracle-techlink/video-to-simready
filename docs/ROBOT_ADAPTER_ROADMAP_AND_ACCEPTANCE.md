@@ -116,9 +116,10 @@ not demonstrate live inference or live Isaac control.
 - **Python 3.12 regression: PASS.** GitHub Actions completed `cpu-tests
   (3.12)` successfully on this head. Static checks, CPU contract tests, package
   smoke, Python 3.10, and merge gate also pass; `main-artifacts` is skipped as
-  expected for a PR. The latest pushed head's complete required CI is green.
-  The policy-loop implementation passed focused local checks (`27`
-  policy-loop tests, `173` robotics tests, Ruff, format, and architecture).
+  expected for a PR. The previous pushed head had all required checks green;
+  CI for the current freshness-fix head is running. The policy-loop
+  implementation passed focused checks (`27` policy-loop tests, `173`
+  robotics tests, Ruff, format, and architecture).
 - **Qwen 3.8 live image/function-call smoke: BLOCKED.** The server-side
   configuration audit found no configured Qwen, DashScope, or Spark endpoint,
   model, or credential in the permitted environment and user/deployment
@@ -144,10 +145,10 @@ not demonstrate live inference or live Isaac control.
   `/root/gpufree-data/liuyue/runs/robot-adapter-acceptance-20261118/pr31-9a21f8d/arm-only-root-articulation-20261118T090909Z/root-articulation-acceptance.json`.
 - **Freshness bug found during live acceptance.** The `rclpy` joint-state
   callback previously left `received_monotonic_ns` unset, causing reads of a
-  cached message to be stamped as fresh at read time. The callback now records
-  its actual monotonic receive time; a focused regression test covers the
-  callback timestamp. This fix has passed focused local tests but is not yet
-  pushed or covered by CI.
+  cached message to be stamped as fresh at read time. Commit `24d9945` records
+  the callback's monotonic receive time and adds a regression test. The full
+  `tests/robotics` suite passed on the GPUFree server (`174 passed`); GitHub CI
+  for this commit is still running.
 - **Live Qwen→validator→Isaac ROS 2→independent verifier: NOT_RUN.** The Qwen
   endpoint is not configured and the live ROS 2 controller is not operational.
   The synthetic tests of `PolicyAdapterLoop` are not a substitute. The verifier
