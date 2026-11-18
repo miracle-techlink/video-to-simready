@@ -44,7 +44,6 @@ class PolicyLoopConfig:
     tool_name: str
     command_valid_for_s: float = 2.0
     max_joint_step: float = 0.08
-    """Per-step cap in each joint's own ``JointSpec`` unit (rad or m), not radians."""
     state_timeout_s: float = 0.5
     verification_timeout_s: float = 0.5
 
