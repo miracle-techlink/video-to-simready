@@ -545,6 +545,7 @@ class RclpyTransport:
             velocity=[float(value) for value in message.velocity],
             effort=[float(value) for value in message.effort],
             stamp_ns=_stamp_ns(message),
+            received_monotonic_ns=time.monotonic_ns(),
         )
 
     def _joint_state_type(self) -> Any:

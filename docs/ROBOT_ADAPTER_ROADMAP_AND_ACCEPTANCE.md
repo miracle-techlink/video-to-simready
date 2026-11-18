@@ -116,9 +116,9 @@ not demonstrate live inference or live Isaac control.
 - **Python 3.12 regression: PASS.** GitHub Actions completed `cpu-tests
   (3.12)` successfully on this head. Static checks, CPU contract tests, package
   smoke, Python 3.10, and merge gate also pass; `main-artifacts` is skipped as
-  expected for a PR on the preceding code head. The newly added policy-loop
-  commits have passed focused local checks (`27` policy-loop tests, `173`
-  robotics tests, Ruff, format, and architecture); their GitHub CI is pending.
+  expected for a PR. The latest pushed head's complete required CI is green.
+  The policy-loop implementation passed focused local checks (`27`
+  policy-loop tests, `173` robotics tests, Ruff, format, and architecture).
 - **Qwen 3.8 live image/function-call smoke: BLOCKED.** The server-side
   configuration audit found no configured Qwen, DashScope, or Spark endpoint,
   model, or credential in the permitted environment and user/deployment
@@ -130,15 +130,24 @@ not demonstrate live inference or live Isaac control.
 - **Isaac Sim 6.2 ROS 2 action/feedback: BLOCKED.** A temporary arm-only USD
   derivative with the articulation root relocated to the model root passed
   composed-stage and joint-limit checks; the original USD and upstream robot
-  profiles were unchanged, and the gripper remains excluded/untested. Isaac
-  then initialized `ros2_control` and the joint-state broadcaster, but the
-  trajectory controller failed to load because the temporary YAML declares
-  `gains: {}` (`parameter_value_from failed for parameter 'gains': No
-  parameter value set`). No trajectory controller became active and no action
-  goal was sent. Evidence is under
-  `/root/gpufree-data/liuyue/runs/robot-adapter-acceptance-20261118/pr31-9a21f8d/live-isaac-ros2-20261118T091116Z/`;
-  root relocation validation is
+  profiles were unchanged, and the gripper remains excluded/untested. The
+  controller-manager and both controllers now load and activate. A bounded
+  `FollowJointTrajectory` goal was accepted by the real Isaac controller, whose
+  log reports `Goal reached, success!`, but the adapter timed out waiting for
+  the terminal action result. Before/after `/joint_states` source timestamps
+  were identical, and measured joint motion remained below the requested
+  0.02-radian delta, so independent feedback acceptance failed. A prior client
+  launch also exposed missing Isaac Jazzy paths in the subprocess environment;
+  the acceptance runner now supplies them. Latest evidence:
+  `/root/gpufree-data/liuyue/runs/robot-adapter-acceptance-20261118/pr31-9a21f8d/live-isaac-ros2-20261118T092819Z/`;
+  initial root relocation validation is
   `/root/gpufree-data/liuyue/runs/robot-adapter-acceptance-20261118/pr31-9a21f8d/arm-only-root-articulation-20261118T090909Z/root-articulation-acceptance.json`.
+- **Freshness bug found during live acceptance.** The `rclpy` joint-state
+  callback previously left `received_monotonic_ns` unset, causing reads of a
+  cached message to be stamped as fresh at read time. The callback now records
+  its actual monotonic receive time; a focused regression test covers the
+  callback timestamp. This fix has passed focused local tests but is not yet
+  pushed or covered by CI.
 - **Live Qwen→validator→Isaac ROS 2→independent verifier: NOT_RUN.** The Qwen
   endpoint is not configured and the live ROS 2 controller is not operational.
   The synthetic tests of `PolicyAdapterLoop` are not a substitute. The verifier
@@ -164,9 +173,10 @@ verified:
    acquire the shared GPU lock, send one small bounded
    `FollowJointTrajectory` goal through the adapter, and record its terminal
    action result plus fresh measured `/joint_states` and tracking error. Current
-   status: **BLOCKED** (server and lock are available; temporary root relocation
-   fixed the articulation-view lookup, but the trajectory controller will not
-   load from the current temporary YAML; no action goal was sent).
+   status: **BLOCKED** (controller and action server are active and the bounded
+   goal reaches the controller, but the client times out without a terminal
+   result and joint feedback is stale/unchanged; investigate ROS2 action result
+   delivery and simulation-time progression before another live run).
 3. **Closed-loop simulation canary:** connect the accepted Qwen provider to the
    canonical action validator and Isaac ROS 2 adapter. Send a fresh camera/state
    observation, validate the returned action, execute only the bounded

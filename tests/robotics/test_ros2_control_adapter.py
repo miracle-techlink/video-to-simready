@@ -8,8 +8,10 @@ missing-dependency failure path.
 from __future__ import annotations
 
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -339,6 +341,23 @@ def test_get_state_rejects_stale_receipt():
     adapter.connect()
     with pytest.raises(Ros2TransportError, match="stale"):
         adapter.get_state()
+
+
+def test_rclpy_joint_state_callback_stamps_receive_monotonic_time():
+    transport = RclpyTransport.__new__(RclpyTransport)
+    message = SimpleNamespace(
+        name=ARM,
+        position=[0.0] * len(ARM),
+        velocity=[],
+        effort=[],
+        header=SimpleNamespace(stamp=SimpleNamespace(sec=12, nanosec=34)),
+    )
+    before_ns = time.monotonic_ns()
+    transport._on_joint_state(message)
+    after_ns = time.monotonic_ns()
+
+    assert before_ns <= transport._latest.received_monotonic_ns <= after_ns
+    assert transport._latest.stamp_ns == 12_000_000_034
 
 
 def test_get_state_raises_before_connect_and_without_state():
