@@ -43,6 +43,38 @@ wall clocks. Commands address exactly one declared group and have a sequence
 number and finite validity window. A separate safety supervisor should still
 enforce workspace, speed, collision, emergency-stop, and operator-enable rules.
 
+## Simulation policy-to-adapter loop
+
+`simready.robotics.policy_loop.PolicyAdapterLoop` supplies the missing
+caller-side boundary between the inert Qwen provider and a simulation adapter.
+It is deliberately separate from `QwenPolicyProvider`, which continues to parse
+only typed data and never imports an adapter or executes a tool. A host injects
+all three collaborators: a policy provider, a `RobotAdapter`, and an
+independent feedback verifier.
+
+For one `run_once()` step the loop reads and validates fresh pre-command state,
+sends the caller observation plus that state to exactly one generated joint-group
+tool schema, requires one call to the configured tool, constructs a short-lived
+`JointCommand`, runs `validate_joint_command`, and only then invokes the
+adapter. Following an accepted receipt it reads and validates fresh post-command
+state and passes both states, the command, and the receipt to the verifier. The
+verifier's result is the only source of the `verified` status; a model response
+is never task-success evidence.
+
+The loop is simulation-only: construction rejects profiles with
+`hardware_verified=True`, and it cannot create transports or import ROS/Isaac.
+Provider/state/verifier timeouts, policy refusal/no-tool/unknown-tool results,
+malformed or invalid arguments, adapter rejection, and bad feedback all return
+explicit fail-closed statuses. In particular, no tool/validation/policy failure
+sends a command. The injected adapter remains responsible for its own transport
+and low-level delta/timeout enforcement.
+
+CPU-only fake tests exercise this sequence and its rejection paths. They are
+synthetic integration evidence only, **not** a Qwen live-inference PASS, Isaac
+ROS 2 live-action PASS, or the live end-to-end canary required before PR #31
+can merge. Those acceptance gates and their evidence requirements remain in
+`docs/ROBOT_ADAPTER_ROADMAP_AND_ACCEPTANCE.md`.
+
 `RobotAdapter` exposes connect, state read, joint-position command, stop, and
 close. Cartesian target validation exists as a separate pure contract; it does
 not yet supply IK, collision checking, trajectory generation, or actuation.

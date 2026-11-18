@@ -294,6 +294,8 @@ def validate_joint_command(
 def _validate_values(profile: RobotProfile, values: Mapping[str, float]) -> None:
     joint_map = profile.joint_map()
     for name, value in values.items():
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise ValueError(f"joint {name!r} value must be finite")
         if not math.isfinite(value):
             raise ValueError(f"joint {name!r} value must be finite")
         joint = joint_map[name]
