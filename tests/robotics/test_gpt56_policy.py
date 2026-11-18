@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import traceback
 from email.message import Message
 from unittest.mock import patch
 
@@ -171,6 +172,31 @@ def test_http_errors_are_typed_and_do_not_include_credentials(monkeypatch):
         str(raised.value)
         == "Qwen API request failed with HTTP status 429: rate limited"
     )
+    # The full traceback (including chained causes) must not leak the key.
+    assert raised.value.__cause__ is None
+    traceback_text = "".join(
+        traceback.format_exception(
+            type(raised.value), raised.value, raised.value.__traceback__
+        )
+    )
+    assert KEY not in traceback_text
+
+
+def test_connection_errors_do_not_chain_credential_bearing_cause(monkeypatch):
+    provider = _provider(monkeypatch)
+    reason = __import__("urllib.error").error.URLError(
+        "connection reset with secret key sk-test-only-key-value"
+    )
+    with patch("urllib.request.urlopen", side_effect=reason):
+        with pytest.raises(QwenApiError) as raised:
+            provider.decide(instructions="x", observation={}, tools=TOOLS)
+    assert raised.value.__cause__ is None
+    traceback_text = "".join(
+        traceback.format_exception(
+            type(raised.value), raised.value, raised.value.__traceback__
+        )
+    )
+    assert KEY not in traceback_text
 
 
 def test_timeout_is_typed(monkeypatch):

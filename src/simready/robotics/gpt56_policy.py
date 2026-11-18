@@ -100,13 +100,16 @@ class Gpt56MessagesTransport:
             with urllib.request.urlopen(request, timeout=timeout_s) as response:
                 raw = response.read()
         except urllib.error.HTTPError as error:
-            raise QwenApiError(error.code, _http_detail(error.code)) from error
+            # The upstream exception (headers, URL, reason text) can carry the
+            # API key; never chain it into the raised error, not even as the
+            # implicit traceback cause.
+            raise QwenApiError(error.code, _http_detail(error.code)) from None
         except urllib.error.URLError as error:
             if _is_timeout(error.reason):
-                raise QwenTimeoutError("GPT-5.6 Messages endpoint timed out") from error
-            raise QwenApiError(0, "connection failed") from error
-        except TimeoutError as error:
-            raise QwenTimeoutError("GPT-5.6 Messages endpoint timed out") from error
+                raise QwenTimeoutError("GPT-5.6 Messages endpoint timed out") from None
+            raise QwenApiError(0, "connection failed") from None
+        except TimeoutError:
+            raise QwenTimeoutError("GPT-5.6 Messages endpoint timed out") from None
         try:
             response_body = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
