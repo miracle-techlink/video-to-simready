@@ -7,22 +7,32 @@ backends. Policy and task code should consume normalized state and issue
 bounded commands through this boundary; it should not depend on vendor SDK
 types, ROS message ordering, or Isaac prim paths.
 
-This first increment provides contracts and versioned profile manifests. It
-does **not** yet include a live ROS 2, Isaac Sim, reBot SDK, or AgiBot hardware
-adapter. The profiles are configuration examples, not proof of robot
-commissioning. Hardware commands remain disabled unless a profile has passed
-hardware-specific commissioning and is explicitly marked verified.
+The current feature branch provides canonical joint and Cartesian action
+contracts, a typed Qwen policy provider, direct Isaac articulation and
+Isaac-hosted `ros2_control` adapters, plus separate reBot driver profiles.
+CPU contract tests pass. The ROS 2 adapter has not yet passed a live Isaac
+action/feedback smoke; the official reBot profile is configuration-only, and
+no real hardware adapter has been commissioned. Profiles and mocked tests do
+not prove that a physical robot is safe to operate. Hardware commands remain
+disabled unless a profile has passed hardware-specific commissioning and is
+explicitly marked verified.
 
 ## Layering
 
 ```text
-task / policy / workflow
-          │ RobotAdapter + canonical contracts
-          ├──────────────┬────────────────┐
-          │              │                │
-     Isaac adapter   ROS 2 adapter   vendor SDK adapter
-          │              │                │
-      USD/PhysX       ROS messages      manufacturer API
+task + observation history
+          │
+Qwen provider (typed tool call; no execution)
+          │
+Cartesian/joint contract + freshness and bounds checks
+          │
+RobotAdapter
+   ├── Isaac direct articulation → USD/PhysX
+   └── Isaac ros2_control simulation adapter → ROS 2 action/state
+                                      │
+                              future vendor adapter
+                                      │
+                             manufacturer API/ROS 2
 ```
 
 The adapter is responsible for joint-name mapping, ordering, unit conversion,
@@ -34,9 +44,10 @@ number and finite validity window. A separate safety supervisor should still
 enforce workspace, speed, collision, emergency-stop, and operator-enable rules.
 
 `RobotAdapter` exposes connect, state read, joint-position command, stop, and
-close. Cartesian control, reset/home, camera, and gripper capabilities should
-be explicit optional capability protocols when introduced; adapters must not
-pretend every robot supports them. This avoids making a lowest-common-
+close. Cartesian target validation exists as a separate pure contract; it does
+not yet supply IK, collision checking, trajectory generation, or actuation.
+Reset/home, camera, and gripper commands remain explicit capabilities; adapters
+must not pretend every robot supports them. This avoids making a lowest-common-
 denominator method silently unsafe or meaningless.
 
 ## Pilot profile: Seeed reBot Arm B601-RS
@@ -147,8 +158,11 @@ command expires, or commissioning is incomplete.
 
 ## Current validation scope
 
-The profile canary validates schema, group membership, declared limits, and
-the command/state contract without connecting to a physical robot. It does not
-claim Isaac motion, ROS graph integration, sim-to-real parity, or physical
-hardware verification. Those require a later adapter implementation and
-server-side simulation/hardware-in-the-loop runs.
+CPU tests cover profile schemas, command/state contracts, typed Qwen tool-call
+parsing, Cartesian action freshness and limits, and the ROS 2 transport using
+an injected fake client. The Isaac direct-articulation canary has been run on
+the GPU server. The optional Isaac `ros2_control` adapter still needs a live
+server-side ROS action and measured-state acceptance run. The official Seeed
+reBot profile records documented interfaces but deliberately leaves executable
+command endpoints unset; no physical robot command or hardware commissioning
+has occurred. AgiBot G2 remains a simulation profile only.

@@ -82,6 +82,31 @@ this source-layout checkout: it lacks `PYTHONPATH=src` and fails robotics test
 collection. This is an environment invocation issue, not a product-test
 failure; the project acceptance command above is authoritative.
 
+## 2026-11-18 independent revalidation
+
+Codex reran acceptance on `feat/robot-adapters` at `c2bf687` after reviewing
+the separate module branches and their integration:
+
+```bash
+PYTHONPATH=src python -m pytest -q tests/robotics
+# 142 passed
+PYTHONPATH=src python -m pytest -q -m 'not real_model and not gpu'
+# 1500 passed, 1 skipped, 20 deselected
+ruff check src/simready tests/robotics examples/robot_adapters
+# All checks passed
+ruff format --check src/simready tests/robotics examples/robot_adapters
+# 136 files already formatted
+python scripts/check_architecture.py
+# Architecture PASS: 9 domains, 17 public functions
+```
+
+Module gates are unchanged: Qwen inference remains blocked by the configured
+Spark-compatible endpoint returning HTTP 502; Isaac ROS 2 live acceptance
+remains blocked because the configured GPU server SSH/lock could not be
+accessed; physical reBot hardware remains NOT_RUN and fail-closed. These
+results validate CPU integration and contracts, not an end-to-end Qwen-to-ROS
+robot task.
+
 ## Evidence required per executed action
 
 Record source commit, robot profile hash, observation timestamp and image hash,

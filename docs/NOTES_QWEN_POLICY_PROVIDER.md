@@ -45,11 +45,13 @@ env names, input/schema failures, and the no-execution/no-adapter invariant.
 
 ## Server smoke
 
-Status: **NOT_RUN**. The server/worker presence-only probe found no configured
-`QWEN_*` or `DASHSCOPE_*` endpoint, model, or credential variable names. No
-values were read, no request was sent, no image was submitted, no GPU was used,
-and no tool or robot action occurred. Therefore model ID, image-input support,
-function-call support, and latency are all not measured. The provider accepts
-multimodal requests, but live endpoint compatibility is not yet verified.
+Status: **BLOCKED / NOT_ACCEPTED**. The configured Spark-compatible endpoint
+returned HTTP 502 during connectivity probing; no successful model response
+was received and no replacement endpoint/model configuration is available.
+An earlier presence-only probe on the server worker found no standard
+`QWEN_*` or `DASHSCOPE_*` environment-variable names; it did not read values.
+No API credential is recorded here. Model ID, image-input compatibility,
+function-call compatibility, and successful inference latency remain
+unverified. No tool or robot action was sent.
 
 Redacted evidence: `/home/nvidia/algotithm/.simready-collaboration/robot-adapters-20261116/policy-qwen/env-presence-probe.json`.
