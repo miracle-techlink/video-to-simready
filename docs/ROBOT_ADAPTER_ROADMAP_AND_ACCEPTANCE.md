@@ -107,6 +107,40 @@ accessed; physical reBot hardware remains NOT_RUN and fail-closed. These
 results validate CPU integration and contracts, not an end-to-end Qwen-to-ROS
 robot task.
 
+## Remaining acceptance gates before PR #31 merge
+
+The PR's GitHub CPU/static/package checks currently pass, but these checks do
+not close the live integration gates below. Keep PR #31 open until Qwen and
+Isaac simulation run together through the actual control boundary:
+
+1. **Qwen live inference:** configure the intended Qwen model/endpoint; receive
+   a successful function-call response and exercise an image-bearing request.
+   Record model ID, endpoint status, latency, parsed tool-call shape, and
+   redacted evidence. Do not execute the tool in the Qwen smoke. Current status:
+   **BLOCKED** (configured Spark-compatible endpoint returned HTTP 502).
+2. **Isaac ROS 2 live action:** on the configured GPUFree Isaac Sim 6.2 server,
+   acquire the shared GPU lock, send one small bounded
+   `FollowJointTrajectory` goal through the adapter, and record its terminal
+   action result plus fresh measured `/joint_states` and tracking error. Current
+   status: **BLOCKED** (SSH/lock access unavailable).
+3. **Closed-loop simulation canary:** connect the accepted Qwen provider to the
+   canonical action validator and Isaac ROS 2 adapter. Send a fresh camera/state
+   observation, validate the returned action, execute only the bounded
+   simulation command, then verify the post-action state with an independent
+   task check. Preserve source/profile hashes and action/result evidence. This
+   is currently **NOT_RUN**; isolated provider and adapter tests are not a
+   substitute.
+4. **Merge hygiene:** refresh the feature branch, ensure the PR head contains
+   this acceptance record, rerun required GitHub checks, review the complete
+   diff, and merge PR #31 through GitHub only after gates 1–3 pass.
+
+The following are explicitly outside PR #31's merge gate and must remain
+fail-closed: physical reBot commissioning (no robot/E-stop procedure has been
+validated here) and a physical AgiBot G2 adapter (only a simulation profile is
+present). Cartesian validation also does not yet implement IK, collision
+checking, trajectory generation, or a physical command path; those require a
+separate implementation and acceptance scope.
+
 ## Evidence required per executed action
 
 Record source commit, robot profile hash, observation timestamp and image hash,
