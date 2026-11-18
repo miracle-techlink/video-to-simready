@@ -83,6 +83,9 @@ class FakeClock:
     def now_ns(self) -> int:
         return self._now_ns
 
+    def advance(self, seconds: float) -> None:
+        self._now_ns += int(seconds * 1e9)
+
 
 @dataclass
 class FakeGoalHandle:
@@ -221,6 +224,25 @@ class FakePolicy:
         return self.decision
 
 
+class ClockAdvancingPolicy(FakePolicy):
+    """Simulates inference latency after the adapter has supplied state."""
+
+    def __init__(self, decision, clock: FakeClock, delay_s: float):
+        super().__init__(decision)
+        self._clock = clock
+        self._delay_s = delay_s
+
+    def decide(self, *, instructions, observation, tools, image_data_urls=()):
+        decision = super().decide(
+            instructions=instructions,
+            observation=observation,
+            tools=tools,
+            image_data_urls=image_data_urls,
+        )
+        self._clock.advance(self._delay_s)
+        return decision
+
+
 class FakeVerifier:
     def __init__(self, result=None, error: Exception | None = None):
         self.result = result or VerificationResult(accepted=True, detail="tracked")
@@ -261,8 +283,8 @@ def qwen_env(monkeypatch):
 def test_configuration_and_adapter_scope_fail_closed():
     with pytest.raises(ValueError, match="positive number"):
         PolicyLoopConfig(group="arm", tool_name="move", state_timeout_s=0)
-    with pytest.raises(ValueError, match="max_joint_step_rad"):
-        PolicyLoopConfig(group="arm", tool_name="move", max_joint_step_rad=0)
+    with pytest.raises(ValueError, match="max_joint_step"):
+        PolicyLoopConfig(group="arm", tool_name="move", max_joint_step=0)
 
     class HardwareAdapter:
         # A frozen dataclass profile cannot be flagged hardware-verified without
@@ -343,7 +365,7 @@ def test_oversized_within_profile_delta_sends_no_goal():
 
 
 def test_boundary_delta_at_step_cap_is_allowed():
-    arguments = {**TARGETS, "joint1": CONFIG.max_joint_step_rad}
+    arguments = {**TARGETS, "joint1": CONFIG.max_joint_step}
     decision = PolicyDecision(
         calls=(ToolCall(name=CONFIG.tool_name, arguments=arguments),)
     )
@@ -354,49 +376,68 @@ def test_boundary_delta_at_step_cap_is_allowed():
     assert result.status == "verified"
 
 
-def test_observation_image_propagates_through_provider_without_logging_bytes(qwen_env):
-    # The loop forwards the caller's observation mapping verbatim; a data-URL
-    # image placed in it reaches the provider request exactly once as JSON
-    # text, and the raw data URL never leaks into result detail.
+def test_image_data_urls_forwarded_to_multimodal_blocks_without_logging_bytes(qwen_env):
+    # End-to-end vision path: images passed to run_once(image_data_urls=...) are
+    # forwarded to the provider and become OpenAI image_url content blocks in
+    # the request; the raw data URL never appears in the result.
     adapter, _, clock = make_adapter()
     image = "data:image/png;base64,YWJjZGU="
     http = FakeQwenTransport(tool_call_response(TARGETS))
     loop = loop_for(QwenPolicyProvider(transport=http), adapter, FakeVerifier(), clock)
     result = loop.run_once(
         instructions="choose safe targets",
-        observation={"task": "x", "image_data_urls": [image]},
+        observation={"task": "x"},
+        image_data_urls=[image],
     )
     assert result.status == "verified"
     (request,) = http.seen
     content = request["body"]["messages"][-1]["content"]
-    assert content.count(image) == 1
+    assert isinstance(content, list)
+    assert content[0]["type"] == "text"
+    assert content[1] == {"type": "image_url", "image_url": {"url": image}}
     assert image not in result.detail
     assert image not in str(result)
 
 
-def test_image_data_urls_reach_provider_vision_blocks(monkeypatch):
-    # The provider's own image_data_urls channel is the vision path: images the
-    # host attaches there must become OpenAI image content blocks, and the loop
-    # result must never contain the bytes.
-    monkeypatch.setenv("QWEN_BASE_URL", "https://qwen.test/v1/chat/completions")
-    monkeypatch.setenv("QWEN_MODEL", "qwen-3.8-test")
-    monkeypatch.setenv("QWEN_API_KEY", TEST_KEY)
-    adapter, _, clock = make_adapter()
-    image = "data:image/png;base64,YWJjZGU="
-    http = FakeQwenTransport(tool_call_response(TARGETS))
-    provider = QwenPolicyProvider(transport=http)
-    decision = provider.decide(
-        instructions="inspect",
-        observation={"task": "x"},
-        tools=CONFIG_TOOLS,
-        image_data_urls=[image],
+def test_stale_state_after_inference_latency_sends_no_goal():
+    # Qwen latency ages state_before past state_timeout_s between the pre-
+    # inference read and dispatch; the revalidation must fail closed.
+    adapter, transport, clock = make_adapter()
+    policy = ClockAdvancingPolicy(valid_decision(), clock, CONFIG.state_timeout_s + 0.1)
+    result = loop_for(policy, adapter, FakeVerifier(), clock).run_once(
+        instructions="go", observation={}
     )
-    assert decision.refusal is False
-    (request,) = http.seen
-    content = request["body"]["messages"][-1]["content"]
-    assert isinstance(content, list)
-    assert content[1] == {"type": "image_url", "image_url": {"url": image}}
-    assert image not in str(decision)
+    assert result.status == "state_invalid"
+    assert "no longer fresh" in result.detail
+    assert result.dispatched is False
+    assert transport.trajectory_client.sent == []
+
+
+def test_fresh_state_after_short_inference_still_dispatches():
+    adapter, transport, clock = make_adapter()
+    policy = ClockAdvancingPolicy(valid_decision(), clock, 0.1)
+    result = loop_for(policy, adapter, FakeVerifier(), clock).run_once(
+        instructions="go", observation={}
+    )
+    assert result.status == "verified"
+    assert len(transport.trajectory_client.sent) == 1
+
+
+def test_multiple_tool_calls_send_no_command():
+    decision = PolicyDecision(
+        calls=(
+            ToolCall(name=CONFIG.tool_name, arguments=TARGETS),
+            ToolCall(name=CONFIG.tool_name, arguments=TARGETS, index=1),
+        )
+    )
+    adapter, transport, clock = make_adapter()
+    result = loop_for(FakePolicy(decision), adapter, FakeVerifier(), clock).run_once(
+        instructions="go", observation={}
+    )
+    assert result.status == "no_single_tool_call"
+    assert "2" in result.detail
+    assert result.dispatched is False
+    assert transport.trajectory_client.sent == []
 
 
 def test_tool_schema_is_exactly_the_commandable_arm_group():

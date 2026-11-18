@@ -70,8 +70,13 @@ adapter acceptable — the commissioning flag alone is not physical protection.
 The loop cannot create transports or import ROS/Isaac.
 
 Per-step motion is bounded twice: profile limits via `validate_joint_command`,
-then `max_joint_step_rad` (default 0.08) against the measured pre-command
+then `max_joint_step` (default 0.08) against the measured pre-command
 state, so an in-limit but oversized single step is rejected before dispatch.
+The step cap is measured in each commanded `JointSpec` unit (radians for
+revolute joints, metres for prismatic joints); a mixed-unit profile would need
+a per-joint cap mapping, which is not implemented. State freshness is also
+revalidated immediately before dispatch, so Qwen latency cannot send a
+command against a stale pre-inference observation.
 Provider/state/verifier timeouts, policy refusal/no-tool/unknown-tool results,
 malformed or invalid arguments, adapter rejection, and bad feedback all return
 explicit fail-closed statuses. In particular, no tool/validation/policy failure
@@ -80,6 +85,14 @@ and low-level delta/timeout enforcement. The verifier's `timeout_s` is a
 cooperative deadline the verifier enforces itself: the loop reports
 `verification_timeout` when the verifier signals timeout, but does not
 interrupt one that overruns.
+
+`run_once(..., image_data_urls=...)` forwards caller-supplied base64 image data
+URLs to `QwenPolicyProvider`'s multimodal request channel; the loop does not
+persist or include image bytes in its result details. Camera capture, encoding,
+calibration, and **camera-frame freshness** remain caller responsibilities: the
+loop can validate robot-state receipt time but cannot infer image capture time
+from a data URL. A live host must bind an observation timestamp and image hash
+to its external evidence record.
 
 CPU-only fake tests exercise this sequence and its rejection paths. They are
 synthetic integration evidence only, **not** a Qwen live-inference PASS, Isaac

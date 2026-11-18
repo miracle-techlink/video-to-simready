@@ -32,12 +32,19 @@ from simready.robotics.qwen_policy import (
 
 @dataclass(frozen=True)
 class PolicyLoopConfig:
-    """Bound one simulation policy step and name its sole permitted tool."""
+    """Bound one simulation policy step and name its sole permitted tool.
+
+    ``max_joint_step`` is measured in each commanded ``JointSpec`` unit: radians
+    for revolute joints and metres for prismatic joints. One shared cap is only
+    appropriate for homogeneous groups; mixed-unit groups need a future
+    per-joint cap mapping rather than a misleading conversion.
+    """
 
     group: str
     tool_name: str
     command_valid_for_s: float = 2.0
-    max_joint_step_rad: float = 0.08
+    max_joint_step: float = 0.08
+    """Per-step cap in each joint's own ``JointSpec`` unit (rad or m), not radians."""
     state_timeout_s: float = 0.5
     verification_timeout_s: float = 0.5
 
@@ -46,7 +53,7 @@ class PolicyLoopConfig:
             raise ValueError("group and tool_name must be nonempty")
         for name in (
             "command_valid_for_s",
-            "max_joint_step_rad",
+            "max_joint_step",
             "state_timeout_s",
             "verification_timeout_s",
         ):
@@ -272,8 +279,25 @@ class PolicyAdapterLoop:
 
         # Profile limits alone do not bound one policy step: reject targets whose
         # per-joint delta from the measured pre-command state exceeds the cap.
+        # Inference latency may also have aged that state since it was read, so
+        # revalidate freshness against the same observation immediately before
+        # dispatch: a stale-but-valid contract command must not be sent.
+        try:
+            validate_robot_state(
+                self._adapter.profile,
+                state_before,
+                now_monotonic_ns=self._now_monotonic_ns(),
+                max_age_s=self._config.state_timeout_s,
+            )
+        except ValueError as error:
+            return PolicyLoopResult(
+                status="state_invalid",
+                detail=f"pre-dispatch state no longer fresh: {error}",
+                command=command,
+                state_before=state_before,
+            )
         step_error = _joint_step_error(
-            command, state_before, self._config.max_joint_step_rad
+            command, state_before, self._config.max_joint_step
         )
         if step_error is not None:
             return PolicyLoopResult(
@@ -383,7 +407,7 @@ class PolicyAdapterLoop:
 
 
 def _joint_step_error(
-    command: JointCommand, state_before: RobotState, max_joint_step_rad: float
+    command: JointCommand, state_before: RobotState, max_joint_step: float
 ) -> str | None:
     """Return a rejection detail when a target exceeds the measured step cap."""
     deltas = {
@@ -391,6 +415,6 @@ def _joint_step_error(
         for name in command.positions
     }
     worst = max(deltas.values(), default=0.0)
-    if worst <= max_joint_step_rad:
+    if worst <= max_joint_step:
         return None
-    return f"command exceeds per-joint step cap {max_joint_step_rad}: {deltas}"
+    return f"command exceeds per-joint step cap {max_joint_step}: {deltas}"
