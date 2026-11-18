@@ -16,9 +16,11 @@ for the Isaac-side Controller Manager, joint-name, clock, and YAML setup.
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from numbers import Real
 from typing import Any, Protocol
 
 from simready.robotics.contracts import (
@@ -70,6 +72,12 @@ class Ros2AdapterConfig:
         )
         for name in positive:
             value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, Real):
+                raise ValueError(
+                    f"{name} must be a real number, got {type(value).__name__}"
+                )
+            if not math.isfinite(float(value)):
+                raise ValueError(f"{name} must be finite, got {value}")
             if value <= 0:
                 raise ValueError(f"{name} must be positive")
         if self.controller_name.startswith("/"):
@@ -91,6 +99,11 @@ class GoalOutcome:
     ``status`` is one of ``succeeded``, ``aborted``, ``preempted``,
     ``rejected``, ``timeout``. ``error_code`` mirrors
     ``control_msgs/FollowJointTrajectory.Result`` when the server reported one.
+
+    ``succeeded`` requires both the terminal status ``succeeded`` and
+    ``error_code == 0``: FollowJointTrajectory results can carry a nonzero
+    error_code even alongside an OK-looking status, and a missing error_code
+    means the server never confirmed a clean result.
     """
 
     status: str
@@ -99,7 +112,7 @@ class GoalOutcome:
 
     @property
     def succeeded(self) -> bool:
-        return self.status == "succeeded"
+        return self.status == "succeeded" and self.error_code == 0
 
 
 class GoalHandleLike(Protocol):
@@ -229,6 +242,13 @@ class IsaacRos2ControlAdapter:
         self._last_sequence = -1
         self._last_positions: Mapping[str, float] | None = None
         self._active_goal: GoalHandleLike | None = None
+        self._commanded_group: str | None = None
+        # A send_goal failure can occur after the server accepted the request but
+        # before this process received a handle. Without a handle it cannot
+        # cancel or observe the trajectory, so only an external controller stop
+        # followed by a new adapter instance may resume motion.
+        self._dispatch_uncertain = False
+        self._motion_blocked_reason: str | None = None
 
     @property
     def config(self) -> Ros2AdapterConfig:
@@ -320,6 +340,7 @@ class IsaacRos2ControlAdapter:
         validate_joint_command(self.profile, command, now_monotonic_ns=now)
         if command.sequence <= self._last_sequence:
             raise ValueError("command sequence must increase monotonically")
+        self._require_motion_unblocked()
         if self._active_goal is not None:
             # A previous goal never reached a terminal result (caller ignored a
             # receipt, or the host loop crashed between send and report). Fail
@@ -327,24 +348,33 @@ class IsaacRos2ControlAdapter:
             # silently interleave with the last trajectory.
             raise Ros2TransportError(
                 "a previous goal is still unresolved; call stop() to cancel and "
-                "re-sync, or close() before sending the next command"
+                "re-sync before sending the next command"
             )
         positions = {name: float(command.positions[name]) for name in command.positions}
         self._check_joint_delta(positions)
         duration = min(command.valid_for_s, self._config.max_goal_duration_s)
         client = self._transport.trajectory_client
-        goal = client.send_goal(
-            list(self.profile.groups[command.group]),
-            [positions[name] for name in self.profile.groups[command.group]],
-            duration,
-            self._config.goal_tolerance_s,
-        )
+        try:
+            goal = client.send_goal(
+                list(self.profile.groups[command.group]),
+                [positions[name] for name in self.profile.groups[command.group]],
+                duration,
+                self._config.goal_tolerance_s,
+            )
+        except Exception as error:
+            self._block_uncertain_dispatch(error)
+            raise Ros2TransportError(
+                "goal dispatch outcome is unknown; no further motion or hold may "
+                "be sent by this adapter. Stop the external controller and create "
+                "a new adapter instance before resuming"
+            ) from error
         if not goal.accepted:
             return self._receipt(
                 command, accepted=False, detail=f"goal rejected: {goal.detail}"
             )
         self._last_sequence = command.sequence
         self._active_goal = goal
+        self._commanded_group = command.group
         try:
             outcome = client.wait_for_result(goal, self._config.goal_timeout_s)
         except Exception as error:
@@ -356,7 +386,7 @@ class IsaacRos2ControlAdapter:
                 accepted=False,
                 detail=(
                     f"goal result wait failed: {error}; "
-                    f"{'goal canceled' if cancelled else 'goal remains unresolved; call stop() or close()'}"
+                    f"{'goal canceled' if cancelled else 'goal remains unresolved; call stop() or externally stop the controller'}"
                 ),
             )
         if outcome.status == "timeout":
@@ -401,20 +431,27 @@ class IsaacRos2ControlAdapter:
         """Cancel any unresolved goal, then hold at the last measured positions.
 
         This is a command-stream hold: it cancels an in-flight FollowJointTrajectory
-        goal (best effort, bounded by ``goal_timeout_s``), then re-targets the
-        freshest measured positions with one short trajectory. It is not an
-        E-stop, controller deactivation, collision response, or hardware safety
-        mechanism; Isaac's playback-tied controller manager remains the final
-        authority on motion.
+        goal (bounded by ``goal_timeout_s`` and verified against a terminal
+        result), then re-targets the freshest measured positions of the joint
+        group this controller actually received commands for, with one short
+        trajectory. The hold goal is itself tracked: a timeout, exception, or
+        rejected hold permanently blocks this adapter from further motion and
+        raises ``Ros2TransportError``. If the adapter never sent a command, no
+        hold can be derived and stop() raises instead of inventing one. It is
+        not an E-stop, controller deactivation, collision response, or hardware
+        safety mechanism; Isaac's playback-tied controller manager remains the
+        final authority on motion.
         """
         self._require_connected()
+        self._require_motion_unblocked()
         client = self._transport.trajectory_client
         if self._active_goal is not None:
             goal = self._active_goal
             if not self._cancel_silent(goal):
                 # Do not send a competing hold trajectory while the preceding
                 # goal might still be driving the controller. Keep the adapter
-                # blocked until the caller closes/reconnects it.
+                # blocked (_active_goal stays set); a retried stop() may
+                # attempt the cancellation again.
                 raise Ros2TransportError(
                     "stop() could not confirm cancellation of the active goal; "
                     "no hold command was sent"
@@ -425,17 +462,84 @@ class IsaacRos2ControlAdapter:
             raise Ros2TransportError(
                 "stop() needs a fresh JointState; no state received yet"
             )
-        names = list(self.profile.joint_map())
-        goal = client.send_goal(
-            names,
-            [measured.positions[name] for name in names],
-            self._config.spin_period_s,
-            self._config.goal_tolerance_s,
-        )
-        if goal.accepted:
-            client.wait_for_result(goal, self._config.goal_timeout_s)
+        if self._commanded_group is None:
+            # A state-only hold can invent motion for joints that were never
+            # commanded (e.g. a gripper) and is therefore not a safe stop.
+            raise Ros2TransportError(
+                "stop() has no commanded joint group to hold; no command has "
+                "reached this controller through this adapter"
+            )
+        names = list(self.profile.groups[self._commanded_group])
+        hold_target = {name: measured.positions[name] for name in names}
+        try:
+            hold_goal = client.send_goal(
+                names,
+                [hold_target[name] for name in names],
+                self._config.spin_period_s,
+                self._config.goal_tolerance_s,
+            )
+        except Exception as error:
+            self._block_uncertain_dispatch(error)
+            raise Ros2TransportError(
+                "hold dispatch outcome is unknown; no further motion may be "
+                "sent by this adapter. Stop the external controller and create "
+                "a new adapter instance before resuming"
+            ) from error
+        if not hold_goal.accepted:
+            self._block_motion(f"hold goal rejected: {hold_goal.detail}")
+            raise Ros2TransportError(
+                f"hold goal rejected: {hold_goal.detail}"
+            )
+        self._active_goal = hold_goal
+        try:
+            outcome = client.wait_for_result(hold_goal, self._config.goal_timeout_s)
+        except Exception as error:
+            cancelled = self._cancel_silent(hold_goal)
+            if cancelled:
+                self._active_goal = None
+            self._block_motion(f"hold goal result wait failed: {error}")
+            raise Ros2TransportError(
+                f"hold goal result wait failed: {error}; "
+                f"{'hold canceled' if cancelled else 'hold remains unresolved'}"
+            ) from error
+        if outcome.status == "timeout":
+            cancelled = self._cancel_silent(hold_goal)
+            if cancelled:
+                self._active_goal = None
+            self._block_motion(
+                f"hold goal timed out after {self._config.goal_timeout_s}s"
+            )
+            raise Ros2TransportError(
+                f"hold goal timed out after {self._config.goal_timeout_s}s; "
+                f"{'hold canceled' if cancelled else 'hold remains unresolved'}"
+            )
+        self._active_goal = None
+        if not outcome.succeeded:
+            self._block_motion(
+                f"hold goal {outcome.status} error_code={outcome.error_code}"
+            )
+            raise Ros2TransportError(
+                f"hold goal {outcome.status} error_code={outcome.error_code} "
+                f"{outcome.detail}".strip()
+            )
 
     def close(self) -> None:
+        """Release this adapter's ROS resources only; never a motion stop.
+
+        Dropping the transport connection does not stop, cancel, or confirm any
+        trajectory: an unresolved goal, an unconfirmed cancellation, or an
+        unknown dispatch remains the external controller's responsibility to
+        stop. Before disconnecting, any unresolved active goal and any
+        uncertain dispatch are latched into a permanent block that survives
+        close()/connect() cycles on this instance, so a reconnect cannot send
+        new motion on top of an untracked trajectory. After close() this
+        instance rejects all motion; resuming motion requires stopping the
+        controller externally and constructing a new adapter.
+        """
+        if self._active_goal is not None:
+            self._block_motion(
+                "close() called with an unresolved active goal"
+            )
         self._connected = False
         self._active_goal = None
         if self._owned_transport and self._transport is not None:
@@ -489,6 +593,35 @@ class IsaacRos2ControlAdapter:
             return self.get_state()
         except Ros2TransportError:
             return None
+
+    def _block_uncertain_dispatch(self, error: Exception) -> None:
+        """Latch that a dispatched goal may exist without a known handle."""
+        self._dispatch_uncertain = True
+        self._block_motion(f"goal dispatch outcome is unknown: {error}")
+
+    def _block_motion(self, reason: str) -> None:
+        """Latch an unsafe motion state until this adapter is discarded.
+
+        Neither close() nor reconnect clears the latch: a closed connection
+        cannot confirm a trajectory ended, so pretending otherwise would invent
+        a terminal state for unknown motion. Resumption always goes through an
+        externally stopped controller and a new adapter instance.
+        """
+        self._motion_blocked_reason = reason
+
+    def _require_motion_unblocked(self) -> None:
+        if self._motion_blocked_reason is None:
+            return
+        if self._dispatch_uncertain:
+            raise Ros2TransportError(
+                "motion is blocked because a prior goal dispatch outcome is "
+                "unknown; stop the external controller and create a new adapter "
+                "instance before resuming"
+            )
+        raise Ros2TransportError(
+            f"motion is blocked: {self._motion_blocked_reason}; stop the external "
+            "controller and create a new adapter instance before resuming"
+        )
 
     def _cancel_silent(self, goal: GoalHandleLike) -> bool:
         """Best-effort bounded cancellation that never masks a timeout report."""
@@ -692,21 +825,59 @@ class _RclpyTrajectoryClient:
         )
 
     def cancel_goal(self, goal: GoalHandleLike, timeout_s: float) -> bool:
-        """Request cancellation and wait for the goal to reach a terminal state."""
+        """Request cancellation and verify the goal reached a terminal state.
+
+        True only when the cancel request itself got a favorable answer
+        (ERROR_NONE, or ERROR_GOAL_TERMINATED when the goal was already
+        terminal) and the goal's result reports a terminal status
+        (SUCCEEDED/CANCELED/ABORTED, goal status codes 4/5/6). Exceptions,
+        timeouts, rejected cancel requests, and non-terminal statuses
+        (e.g. CANCELING) return False so the adapter stays fail-closed.
+        """
         handle = goal._handle
-        cancel_future = handle.cancel_goal_async()
+        try:
+            cancel_future = handle.cancel_goal_async()
+        except Exception:
+            return False
         deadline = time.monotonic() + timeout_s
         while not cancel_future.done() and time.monotonic() < deadline:
             self._spin()
         if not cancel_future.done():
             return False
+        try:
+            cancel_response = cancel_future.result()
+        except Exception:
+            return False
+        return_code = getattr(cancel_response, "return_code", None)
+        # 0 = ERROR_NONE; 3 = ERROR_GOAL_TERMINATED (already terminal, the
+        # result check below still applies). 1/2 mean the server refused or
+        # never knew the goal: cancellation is not confirmed. A malformed
+        # response cannot establish that safety property either.
+        try:
+            if int(return_code) not in (0, 3):
+                return False
+        except (TypeError, ValueError):
+            return False
         # The cancel response only acknowledges the request; the goal must also
         # reach a terminal state (CANCELED/ABORTED/SUCCEEDED) before returning.
-        result_future = handle.get_result_async()
+        try:
+            result_future = handle.get_result_async()
+        except Exception:
+            return False
         deadline = time.monotonic() + timeout_s
         while not result_future.done() and time.monotonic() < deadline:
             self._spin()
-        return result_future.done()
+        if not result_future.done():
+            return False
+        try:
+            result_response = result_future.result()
+        except Exception:
+            return False
+        try:
+            status = int(getattr(result_response, "status", 0))
+        except (TypeError, ValueError):
+            return False
+        return status in (4, 5, 6)
 
     def _build_goal(
         self,

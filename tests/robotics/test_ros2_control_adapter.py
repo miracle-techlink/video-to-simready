@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -23,6 +24,7 @@ from simready.robotics.ros2_control_adapter import (
     MonotonicClock,
     RclpyJointState,
     RclpyTransport,
+    _RclpyTrajectoryClient,
     Ros2AdapterConfig,
     Ros2TransportError,
 )
@@ -59,6 +61,8 @@ class FakeTrajectoryClient:
         self.sent: list[dict] = []
         self.cancelled: list[FakeGoalHandle] = []
         self.cancel_succeeds = True
+        self.send_error: Exception | None = None
+        self.wait_error: Exception | None = None
 
     def server_is_ready(self) -> bool:
         return self.server_ready
@@ -72,9 +76,13 @@ class FakeTrajectoryClient:
                 "tolerance_s": tolerance_s,
             }
         )
+        if self.send_error is not None:
+            raise self.send_error
         return FakeGoalHandle(accepted=self.accepted)
 
     def wait_for_result(self, goal, timeout_s):
+        if self.wait_error is not None:
+            raise self.wait_error
         return self.outcome
 
     def cancel_goal(self, goal, timeout_s):
@@ -208,6 +216,12 @@ def test_config_rejects_bad_values():
         Ros2AdapterConfig(controller_name="/ctrl")
     with pytest.raises(ValueError, match="namespace must contain"):
         Ros2AdapterConfig(namespace="/")
+
+
+@pytest.mark.parametrize("invalid", [True, float("nan"), float("inf"), float("-inf"), "1"])
+def test_config_rejects_nonfinite_nonreal_and_bool_positive_values(invalid):
+    with pytest.raises(ValueError):
+        Ros2AdapterConfig(goal_timeout_s=invalid)
 
 
 # -- connect --------------------------------------------------------------
@@ -414,6 +428,26 @@ def test_send_caps_goal_duration_at_configured_max():
     )
 
 
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        GoalOutcome(status="succeeded", error_code=None),
+        GoalOutcome(status="succeeded", error_code=1),
+    ],
+)
+def test_send_rejects_succeeded_status_without_clean_trajectory_result(outcome):
+    clock = FakeClock()
+    adapter, _, _ = make_adapter(
+        state=joint_state_message(), clock=clock, outcome=outcome
+    )
+    adapter.connect()
+    target = {name: 0.0 for name in ARM}
+    target[ARM[0]] = 0.05
+    receipt = adapter.send_joint_position(command(target, clock=clock))
+    assert receipt.accepted is False
+    assert f"error_code={outcome.error_code}" in receipt.detail
+
+
 def test_send_accepts_only_on_successful_result_and_updates_sequence():
     clock = FakeClock()
     succeeded = GoalOutcome(status="succeeded", error_code=0, detail="")
@@ -589,11 +623,40 @@ def test_stop_holds_measured_positions():
         state=joint_state_message(positions), clock=clock
     )
     adapter.connect()
+    # stop() needs a commanded group; send one arm command first.
+    target = {name: 0.0 for name in ARM}
+    target[ARM[0]] = 0.05
+    adapter.send_joint_position(command(target, clock=clock))
     adapter.stop()
-    sent = transport.trajectory_client.sent[0]
+    sent = transport.trajectory_client.sent[-1]
     measured = adapter.get_state().positions
-    assert sent["joint_names"] == list(PROFILE.joint_map())
-    assert sent["positions"] == [measured[name] for name in PROFILE.joint_map()]
+    assert sent["joint_names"] == ARM
+    assert sent["positions"] == [measured[name] for name in ARM]
+
+
+def test_stop_holds_only_the_commanded_group_not_other_joints():
+    # Counterexample: with all joints in the state, stop() must not target the
+    # gripper joints the controller never received; only the commanded group.
+    clock = FakeClock()
+    adapter, transport, _ = make_adapter(
+        state=joint_state_message(), clock=clock
+    )
+    adapter.connect()
+    target = {name: 0.0 for name in ARM}
+    target[ARM[0]] = 0.05
+    adapter.send_joint_position(command(target, clock=clock))
+    adapter.stop()
+    hold = transport.trajectory_client.sent[-1]
+    assert hold["joint_names"] == ARM
+    assert "gripper_joint1" not in hold["joint_names"]
+
+
+def test_stop_without_commanded_group_fails_closed_without_state_only_hold():
+    adapter, transport, _ = make_adapter(state=joint_state_message())
+    adapter.connect()
+    with pytest.raises(Ros2TransportError, match="no commanded joint group"):
+        adapter.stop()
+    assert transport.trajectory_client.sent == []
 
 
 def test_stop_without_state_raises():
@@ -620,7 +683,11 @@ def test_stop_cancels_an_unresolved_goal_before_holding():
     # A client whose wait_for_result never resolves leaves the goal active.
     class NeverResolvingClient(FakeTrajectoryClient):
         def wait_for_result(self, goal, timeout_s):
-            return GoalOutcome(status="timeout")
+            # The original command times out; after its cancellation is
+            # confirmed, the newly sent hold can complete normally.
+            if len(self.sent) == 1:
+                return GoalOutcome(status="timeout")
+            return GoalOutcome(status="succeeded", error_code=0)
 
     source = FakeJointStateSource(joint_state_message())
     transport = FakeTransport(
@@ -647,9 +714,11 @@ def test_stop_cancels_an_unresolved_goal_before_holding():
     # One failed timeout cancellation, one refused stop cancellation, then one
     # confirmed cancellation immediately before the hold trajectory.
     assert len(transport.trajectory_client.cancelled) == 3
-    # The hold trajectory is the last goal sent, targeting measured positions.
+    # The hold trajectory is the last goal sent, targeting the original arm
+    # command group rather than all state joints.
     hold = transport.trajectory_client.sent[-1]
-    assert hold["positions"] == [adapter.get_state().positions[name] for name in PROFILE.joint_map()]
+    assert hold["joint_names"] == ARM
+    assert hold["positions"] == [adapter.get_state().positions[name] for name in ARM]
 
 
 def test_get_state_stamps_the_receipt_time_of_the_message():
@@ -674,7 +743,305 @@ def test_close_is_idempotent_and_does_not_close_injected_transport():
         adapter.get_state()
 
 
+def test_stop_hold_rejection_permanently_blocks_motion():
+    clock = FakeClock()
+    adapter, transport, _ = make_adapter(
+        state=joint_state_message(), clock=clock, accepted=False
+    )
+    adapter.connect()
+    target = {name: 0.0 for name in ARM}
+    receipt = adapter.send_joint_position(command(target, clock=clock))
+    assert receipt.accepted is False
+    assert "goal rejected" in receipt.detail
+    transport.trajectory_client.accepted = True
+    adapter.send_joint_position(command(target, clock=clock, sequence=2))
+    transport.trajectory_client.accepted = False
+    with pytest.raises(Ros2TransportError, match="hold goal rejected"):
+        adapter.stop()
+    transport.trajectory_client.accepted = True
+    # The failed hold permanently blocks motion: a retried stop and any new
+    # send are refused.
+    with pytest.raises(Ros2TransportError, match="motion is blocked"):
+        adapter.stop()
+    with pytest.raises(Ros2TransportError, match="motion is blocked"):
+        adapter.send_joint_position(command(target, clock=clock, sequence=3))
+
+
+def test_stop_hold_timeout_permanently_blocks_motion():
+    clock = FakeClock()
+    adapter, transport, _ = make_adapter(
+        state=joint_state_message(),
+        clock=clock,
+        outcome=GoalOutcome(status="timeout"),
+    )
+    adapter.connect()
+    target = {name: 0.0 for name in ARM}
+    target[ARM[0]] = 0.05
+    receipt = adapter.send_joint_position(command(target, clock=clock))
+    assert receipt.accepted is False
+    # Timeout on the original goal leaves it canceled, so stop() proceeds to
+    # the hold, which times out (client still returns timeout outcomes).
+    with pytest.raises(Ros2TransportError, match="hold goal timed out"):
+        adapter.stop()
+    transport.trajectory_client.outcome = GoalOutcome(status="succeeded", error_code=0)
+    with pytest.raises(Ros2TransportError, match="motion is blocked"):
+        adapter.stop()
+    with pytest.raises(Ros2TransportError, match="motion is blocked"):
+        adapter.send_joint_position(command(target, clock=clock, sequence=2))
+
+
+def test_stop_hold_wait_exception_permanently_blocks_motion():
+    clock = FakeClock()
+    adapter, transport, _ = make_adapter(state=joint_state_message(), clock=clock)
+    adapter.connect()
+    target = {name: 0.0 for name in ARM}
+    adapter.send_joint_position(command(target, clock=clock))
+    transport.trajectory_client.wait_error = RuntimeError("controller disconnected")
+    with pytest.raises(Ros2TransportError, match="hold goal result wait failed"):
+        adapter.stop()
+    transport.trajectory_client.wait_error = None
+    with pytest.raises(Ros2TransportError, match="motion is blocked"):
+        adapter.send_joint_position(command(target, clock=clock, sequence=2))
+
+
+def test_stop_hold_failure_result_permanently_blocks_motion():
+    clock = FakeClock()
+    adapter, transport, _ = make_adapter(
+        state=joint_state_message(),
+        clock=clock,
+        outcome=GoalOutcome(status="aborted", error_code=-1),
+    )
+    adapter.connect()
+    target = {name: 0.0 for name in ARM}
+    adapter.send_joint_position(command(target, clock=clock))
+    with pytest.raises(Ros2TransportError, match="hold goal aborted"):
+        adapter.stop()
+    with pytest.raises(Ros2TransportError, match="motion is blocked"):
+        adapter.send_joint_position(command(target, clock=clock, sequence=2))
+
+
+def test_send_goal_exception_latches_permanent_dispatch_block():
+    clock = FakeClock()
+    adapter, transport, _ = make_adapter(state=joint_state_message(), clock=clock)
+    adapter.connect()
+    target = {name: 0.0 for name in ARM}
+    target[ARM[0]] = 0.05
+    transport.trajectory_client.send_error = TimeoutError("no goal response")
+    with pytest.raises(Ros2TransportError, match="dispatch outcome is unknown"):
+        adapter.send_joint_position(command(target, clock=clock))
+    transport.trajectory_client.send_error = None
+    # Counterexample: a second send must not dispatch at all.
+    with pytest.raises(Ros2TransportError, match="motion is blocked"):
+        adapter.send_joint_position(command(target, clock=clock, sequence=2))
+    assert len(transport.trajectory_client.sent) == 1
+    # And stop() must not send a hold either.
+    with pytest.raises(Ros2TransportError, match="motion is blocked"):
+        adapter.stop()
+    assert len(transport.trajectory_client.sent) == 1
+
+
+def test_uncertain_dispatch_latch_survives_close_and_reconnect():
+    clock = FakeClock()
+    adapter, transport, _ = make_adapter(state=joint_state_message(), clock=clock)
+    adapter.connect()
+    transport.trajectory_client.send_error = TimeoutError("no goal response")
+    with pytest.raises(Ros2TransportError, match="dispatch outcome is unknown"):
+        adapter.send_joint_position(command({name: 0.0 for name in ARM}, clock=clock))
+    adapter.close()
+    adapter.connect()
+    with pytest.raises(Ros2TransportError, match="motion is blocked"):
+        adapter.send_joint_position(
+            command({name: 0.0 for name in ARM}, clock=clock, sequence=2)
+        )
+
+
+def test_close_with_unresolved_active_goal_latches_permanent_block():
+    clock = FakeClock()
+    adapter, transport, _ = make_adapter(
+        state=joint_state_message(),
+        clock=clock,
+        outcome=GoalOutcome(status="timeout"),
+    )
+    transport.trajectory_client.cancel_succeeds = False
+    adapter.connect()
+    receipt = adapter.send_joint_position(
+        command({name: 0.0 for name in ARM}, clock=clock)
+    )
+    assert receipt.accepted is False
+    # The goal stays unresolved; close() must latch it before disconnecting.
+    adapter.close()
+    adapter.connect()
+    with pytest.raises(Ros2TransportError, match="motion is blocked"):
+        adapter.send_joint_position(
+            command({name: 0.0 for name in ARM}, clock=clock, sequence=2)
+        )
+
+
 # -- rclpy transport (failure path only) ----------------------------------
+
+
+def _rclpy_client():
+    node = SimpleNamespace()
+    client = _RclpyTrajectoryClient(rclpy=SimpleNamespace(), node=node, action_client=None)
+    return client
+
+
+class FakeFuture:
+    """Deferred result future matching the rclpy ``done()/result()`` shape."""
+
+    def __init__(self):
+        self._done = False
+        self._result: Any = None
+        self._error: Exception | None = None
+
+    def done(self) -> bool:
+        return self._done
+
+    def result(self):
+        if self._error is not None:
+            raise self._error
+        return self._result
+
+    def resolve(self, value: Any) -> None:
+        self._result = value
+        self._done = True
+
+    def fail(self, error: Exception) -> None:
+        self._error = error
+        self._done = True
+
+
+class CancelGoalHandle:
+    """Goal handle whose cancel/result futures are fully controllable."""
+
+    def __init__(self):
+        self.cancel_calls = 0
+        self.result_calls = 0
+
+    def cancel_goal_async(self):
+        self.cancel_calls += 1
+        return self._cancel_future
+
+    def get_result_async(self):
+        self.result_calls += 1
+        return self._result_future
+
+
+def test_cancel_goal_requires_terminal_status_and_clean_cancel_response():
+    # Cancel confirmation must be earned: a done cancel response plus a result
+    # future whose status is non-terminal (CANCELING=8) is NOT confirmation.
+    client = _rclpy_client()
+    handle = CancelGoalHandle()
+    handle._cancel_future = FakeFuture()
+    handle._result_future = FakeFuture()
+
+    def spin():
+        for future, value in (
+            (handle._cancel_future, SimpleNamespace(return_code=0)),
+            (handle._result_future, SimpleNamespace(status=8)),
+        ):
+            if future.done():
+                continue
+            already = getattr(future, "_resolved_once", False)
+            if already:
+                future.resolve(value)
+            else:
+                future._resolved_once = True
+
+    client._spin = spin
+    assert client.cancel_goal(_WrapHandle(handle), 1.0) is False
+    assert handle.cancel_calls == 1
+    assert handle.result_calls == 1
+
+
+class _WrapHandle:
+    def __init__(self, handle):
+        self._handle = handle
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "cancel_goal_async_raises",
+        "cancel_future_never_done",
+        "cancel_result_raises",
+        "cancel_return_code_rejected",
+        "cancel_return_code_unknown",
+        "result_future_never_done",
+        "result_result_raises",
+        "get_result_async_raises",
+        "result_status_executing",
+        "result_status_unknown",
+    ],
+)
+def test_cancel_goal_fail_closed_paths(scenario):
+    client = _rclpy_client()
+    handle = CancelGoalHandle()
+    handle._cancel_future = FakeFuture()
+    handle._result_future = FakeFuture()
+    client._spin = lambda: None  # no progress; deadlines are wall-clock 1.0s
+
+    if scenario == "cancel_goal_async_raises":
+        handle.cancel_goal_async = lambda: (_ for _ in ()).throw(RuntimeError("cancel unavailable"))
+    elif scenario == "cancel_future_never_done":
+        pass
+    elif scenario == "cancel_result_raises":
+        handle._cancel_future.fail(RuntimeError("rclpy down"))
+    elif scenario == "cancel_return_code_rejected":
+        handle._cancel_future.resolve(SimpleNamespace(return_code=1))
+    elif scenario == "cancel_return_code_unknown":
+        handle._cancel_future.resolve(SimpleNamespace(return_code=None))
+    elif scenario == "result_future_never_done":
+        handle._cancel_future.resolve(SimpleNamespace(return_code=0))
+    elif scenario == "get_result_async_raises":
+        handle._cancel_future.resolve(SimpleNamespace(return_code=0))
+        handle.get_result_async = lambda: (_ for _ in ()).throw(RuntimeError("no result channel"))
+    elif scenario == "result_result_raises":
+        handle._cancel_future.resolve(SimpleNamespace(return_code=0))
+        handle._result_future.fail(RuntimeError("result channel broke"))
+    elif scenario == "result_status_executing":
+        handle._cancel_future.resolve(SimpleNamespace(return_code=0))
+        handle._result_future.resolve(SimpleNamespace(status=2))
+    elif scenario == "result_status_unknown":
+        handle._cancel_future.resolve(SimpleNamespace(return_code=0))
+        handle._result_future.resolve(SimpleNamespace(status=0))
+
+    assert client.cancel_goal(_WrapHandle(handle), 0.05) is False
+
+
+@pytest.mark.parametrize("terminal_status", [4, 5, 6])
+def test_cancel_goal_confirms_terminal_status(terminal_status):
+    client = _rclpy_client()
+    handle = CancelGoalHandle()
+    handle._cancel_future = FakeFuture()
+    handle._result_future = FakeFuture()
+    handle._cancel_future.resolve(SimpleNamespace(return_code=0))
+    handle._result_future.resolve(SimpleNamespace(status=terminal_status))
+    client._spin = lambda: None
+    assert client.cancel_goal(_WrapHandle(handle), 0.05) is True
+
+
+@pytest.mark.parametrize("terminated_code", [0, 3])
+def test_cancel_goal_accepts_goal_terminated_return_code(terminated_code):
+    client = _rclpy_client()
+    handle = CancelGoalHandle()
+    handle._cancel_future = FakeFuture()
+    handle._result_future = FakeFuture()
+    handle._cancel_future.resolve(SimpleNamespace(return_code=terminated_code))
+    handle._result_future.resolve(SimpleNamespace(status=5))
+    client._spin = lambda: None
+    assert client.cancel_goal(_WrapHandle(handle), 0.05) is True
+
+
+def test_cancel_goal_rejects_return_code_2():
+    client = _rclpy_client()
+    handle = CancelGoalHandle()
+    handle._cancel_future = FakeFuture()
+    handle._result_future = FakeFuture()
+    handle._cancel_future.resolve(SimpleNamespace(return_code=2))
+    handle._result_future.resolve(SimpleNamespace(status=5))
+    client._spin = lambda: None
+    assert client.cancel_goal(_WrapHandle(handle), 0.05) is False
 
 
 def test_rclpy_transport_without_rclpy_raises_actionable_error(monkeypatch):

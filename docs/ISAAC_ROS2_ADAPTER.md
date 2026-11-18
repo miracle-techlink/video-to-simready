@@ -190,23 +190,34 @@ before acceptance does not consume the sequence.
 
 Timeout and cancellation semantics: when the result watchdog expires, the
 adapter requests goal cancellation and waits (bounded again by
-`goal_timeout_s`) for the goal to reach a terminal state before returning
+`goal_timeout_s`) for a valid cancellation reply **and** a terminal action
+status (`SUCCEEDED`, `CANCELED`, or `ABORTED`) before returning
 `accepted=False`. If cancellation succeeds, the next command is accepted
-normally. If cancellation cannot be confirmed (the cancel response or the
-terminal result never arrives), the adapter holds a fail-closed state and
-raises `Ros2TransportError` on further `send_joint_position()` and `stop()`
-calls until `close()` (a confirmed `stop()` cancel also re-syncs sends); it
-never silently continues a trajectory whose outcome is unknown. The same
-protection applies when `wait_for_result` itself raises: the adapter attempts
-one bounded cancellation and reports the failure rather than assuming the
-goal died.
+normally. If cancellation cannot be confirmed (the cancel response is
+rejected/raises, or the terminal result never arrives), the adapter keeps the
+active goal and raises `Ros2TransportError` on further
+`send_joint_position()` calls until `stop()` cancels it successfully. Closing
+the adapter with such a goal permanently latches a motion block: reconnecting
+that same instance cannot send a new command over an untracked trajectory.
+
+A `send_goal()` exception or response timeout is different: the controller may
+already have accepted motion while the adapter has no goal handle to cancel.
+The adapter records an **uncertain dispatch** and permanently blocks both
+`send_joint_position()` and `stop()` on that instance. `close()` is only a
+connection teardown, not a controller stop; it cannot clear either an
+uncertain-dispatch block or an unresolved-goal block. The caller must stop the
+external controller through its appropriate safety/control interface, then
+construct a new adapter instance before resuming. The same protection applies
+when `wait_for_result` itself raises: the adapter attempts one bounded
+cancellation and reports the failure rather than assuming the goal died.
 
 `stop()` cancels any unresolved in-flight goal (bounded by `goal_timeout_s`).
-If cancellation is confirmed, it then sends a short
-hold-at-measured-position trajectory re-targeting the freshest measured
-positions; if cancellation cannot be confirmed, it raises
-`Ros2TransportError` and sends nothing, because a hold trajectory would
-compete with a goal that may still be running. It is **not an E-stop**,
+If cancellation is confirmed, it sends a short hold-at-measured-position
+trajectory only for the command group last successfully dispatched through
+this controller; it never derives a state-only all-joints/gripper hold. If no
+such group is known, cancellation cannot be confirmed, or the hold is rejected,
+times out, raises, or has an unsuccessful result, it raises `Ros2TransportError`
+and permanently blocks further motion on that adapter. It is **not an E-stop**,
 controller deactivation, collision response, or hardware safety mechanism.
 This adapter is for Isaac simulation only; it never marks the reBot hardware
 profile verified.
