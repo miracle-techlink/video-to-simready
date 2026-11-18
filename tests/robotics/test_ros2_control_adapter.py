@@ -57,6 +57,8 @@ class FakeTrajectoryClient:
         self.outcome = outcome or GoalOutcome(status="succeeded", error_code=0)
         self.accepted = accepted
         self.sent: list[dict] = []
+        self.cancelled: list[FakeGoalHandle] = []
+        self.cancel_succeeds = True
 
     def server_is_ready(self) -> bool:
         return self.server_ready
@@ -74,6 +76,10 @@ class FakeTrajectoryClient:
 
     def wait_for_result(self, goal, timeout_s):
         return self.outcome
+
+    def cancel_goal(self, goal, timeout_s):
+        self.cancelled.append(goal)
+        return self.cancel_succeeds
 
 
 class FakeJointStateSource:
@@ -433,7 +439,7 @@ def test_send_accepts_only_on_successful_result_and_updates_sequence():
 )
 def test_send_returns_rejected_receipt_on_bad_goal_outcomes(outcome):
     clock = FakeClock()
-    adapter, _, _ = make_adapter(
+    adapter, transport, _ = make_adapter(
         state=joint_state_message(), clock=clock, outcome=outcome
     )
     adapter.connect()
@@ -447,7 +453,11 @@ def test_send_returns_rejected_receipt_on_bad_goal_outcomes(outcome):
         assert outcome.status in receipt.detail
         assert f"error_code={outcome.error_code}" in receipt.detail
     # An accepted goal consumes its sequence even if its terminal result is
-    # unsuccessful: use the next sequence for a host-loop retry.
+    # unsuccessful: use the next sequence for a host-loop retry. A timed-out
+    # goal must first be canceled, and cancellation failure blocks new motion.
+    if outcome.status == "timeout":
+        assert len(transport.trajectory_client.cancelled) == 1
+        assert "goal canceled" in receipt.detail
     retry = adapter.send_joint_position(command(target, clock=clock, sequence=2))
     assert retry.accepted is False
     succeeded = GoalOutcome(status="succeeded", error_code=0)
@@ -520,6 +530,55 @@ def test_send_enforces_contract_validation_fail_closed():
         )
 
 
+def test_timeout_cancels_before_returning_rejection():
+    clock = FakeClock()
+    adapter, transport, _ = make_adapter(
+        state=joint_state_message(),
+        clock=clock,
+        outcome=GoalOutcome(status="timeout", detail="controller stalled"),
+    )
+    adapter.connect()
+    target = {name: 0.0 for name in ARM}
+    target[ARM[0]] = 0.05
+
+    receipt = adapter.send_joint_position(command(target, clock=clock))
+
+    assert receipt.accepted is False
+    assert len(transport.trajectory_client.cancelled) == 1
+    assert "goal canceled" in receipt.detail
+    # Once cancellation reaches a terminal result, the next monotonically newer
+    # command is allowed and does not continue the old trajectory.
+    transport.trajectory_client.outcome = GoalOutcome(status="succeeded", error_code=0)
+    assert adapter.send_joint_position(command(target, clock=clock, sequence=2)).accepted
+
+
+def test_failed_timeout_cancellation_blocks_new_commands_until_stop():
+    clock = FakeClock()
+    adapter, transport, _ = make_adapter(
+        state=joint_state_message(),
+        clock=clock,
+        outcome=GoalOutcome(status="timeout"),
+    )
+    transport.trajectory_client.cancel_succeeds = False
+    adapter.connect()
+    target = {name: 0.0 for name in ARM}
+    target[ARM[0]] = 0.05
+
+    receipt = adapter.send_joint_position(command(target, clock=clock))
+
+    assert receipt.accepted is False
+    assert "unresolved" in receipt.detail
+    with pytest.raises(Ros2TransportError, match="previous goal is still unresolved"):
+        adapter.send_joint_position(command(target, clock=clock, sequence=2))
+    with pytest.raises(Ros2TransportError, match="could not confirm cancellation"):
+        adapter.stop()
+    assert len(transport.trajectory_client.cancelled) == 2
+    assert len(transport.trajectory_client.sent) == 1
+    adapter.close()
+    with pytest.raises(RuntimeError, match="connect"):
+        adapter.send_joint_position(command(target, clock=clock, sequence=2))
+
+
 # -- stop/close -----------------------------------------------------------
 
 
@@ -554,6 +613,55 @@ def test_stop_without_state_raises():
     source.message = None
     with pytest.raises(Ros2TransportError, match="fresh JointState"):
         adapter.stop()
+
+
+def test_stop_cancels_an_unresolved_goal_before_holding():
+    clock = FakeClock()
+    # A client whose wait_for_result never resolves leaves the goal active.
+    class NeverResolvingClient(FakeTrajectoryClient):
+        def wait_for_result(self, goal, timeout_s):
+            return GoalOutcome(status="timeout")
+
+    source = FakeJointStateSource(joint_state_message())
+    transport = FakeTransport(
+        trajectory_client=NeverResolvingClient(),
+        joint_state_source=source,
+        clock=clock,
+    )
+    adapter = IsaacRos2ControlAdapter(PROFILE, transport=transport, clock=clock)
+    adapter.connect()
+    target = {name: 0.0 for name in ARM}
+    target[ARM[0]] = 0.05
+    transport.trajectory_client.cancel_succeeds = False
+    receipt = adapter.send_joint_position(command(target, clock=clock))
+    assert receipt.accepted is False
+    # Cancellation stays unconfirmed, so stop() must refuse to send a hold
+    # trajectory that would compete with the still-running goal.
+    with pytest.raises(Ros2TransportError, match="could not confirm cancellation"):
+        adapter.stop()
+    assert len(transport.trajectory_client.sent) == 1
+
+    transport.trajectory_client.cancel_succeeds = True
+    adapter.stop()
+
+    # One failed timeout cancellation, one refused stop cancellation, then one
+    # confirmed cancellation immediately before the hold trajectory.
+    assert len(transport.trajectory_client.cancelled) == 3
+    # The hold trajectory is the last goal sent, targeting measured positions.
+    hold = transport.trajectory_client.sent[-1]
+    assert hold["positions"] == [adapter.get_state().positions[name] for name in PROFILE.joint_map()]
+
+
+def test_get_state_stamps_the_receipt_time_of_the_message():
+    # RobotState.received_monotonic_ns must carry when the transport received
+    # the JointState, not when get_state() read it: the loop's max_age check
+    # measures feedback age, not read latency.
+    clock = FakeClock(now_ns=25_000_100_000)
+    message = joint_state_message(received_monotonic_ns=25_000_000_000)
+    adapter, _, _ = make_adapter(state=message, clock=clock)
+    adapter.connect()
+    state = adapter.get_state()
+    assert state.received_monotonic_ns == 25_000_000_000
 
 
 def test_close_is_idempotent_and_does_not_close_injected_transport():

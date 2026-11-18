@@ -128,6 +128,8 @@ class TrajectoryClientLike(Protocol):
         self, goal: GoalHandleLike, timeout_s: float
     ) -> GoalOutcome: ...
 
+    def cancel_goal(self, goal: GoalHandleLike, timeout_s: float) -> bool: ...
+
 
 class JointStateLike(Protocol):
     """The ``sensor_msgs/msg/JointState`` shape the adapter consumes.
@@ -226,6 +228,7 @@ class IsaacRos2ControlAdapter:
         self._connected = False
         self._last_sequence = -1
         self._last_positions: Mapping[str, float] | None = None
+        self._active_goal: GoalHandleLike | None = None
 
     @property
     def config(self) -> Ros2AdapterConfig:
@@ -294,7 +297,7 @@ class IsaacRos2ControlAdapter:
         efforts = _field_map(message, message.effort) if message.effort else {}
         state = RobotState(
             positions={name: positions[name] for name in self.profile.joint_map()},
-            received_monotonic_ns=self._clock.now_ns(),
+            received_monotonic_ns=int(received_ns),
             source_timestamp_ns=_stamp_ns(message),
             velocities=(
                 {name: velocities[name] for name in self.profile.joint_map()}
@@ -317,6 +320,15 @@ class IsaacRos2ControlAdapter:
         validate_joint_command(self.profile, command, now_monotonic_ns=now)
         if command.sequence <= self._last_sequence:
             raise ValueError("command sequence must increase monotonically")
+        if self._active_goal is not None:
+            # A previous goal never reached a terminal result (caller ignored a
+            # receipt, or the host loop crashed between send and report). Fail
+            # closed instead of issuing an untracked goal whose outcome could
+            # silently interleave with the last trajectory.
+            raise Ros2TransportError(
+                "a previous goal is still unresolved; call stop() to cancel and "
+                "re-sync, or close() before sending the next command"
+            )
         positions = {name: float(command.positions[name]) for name in command.positions}
         self._check_joint_delta(positions)
         duration = min(command.valid_for_s, self._config.max_goal_duration_s)
@@ -332,18 +344,45 @@ class IsaacRos2ControlAdapter:
                 command, accepted=False, detail=f"goal rejected: {goal.detail}"
             )
         self._last_sequence = command.sequence
-        outcome = client.wait_for_result(goal, self._config.goal_timeout_s)
+        self._active_goal = goal
+        try:
+            outcome = client.wait_for_result(goal, self._config.goal_timeout_s)
+        except Exception as error:
+            cancelled = self._cancel_silent(goal)
+            if cancelled:
+                self._active_goal = None
+            return self._receipt(
+                command,
+                accepted=False,
+                detail=(
+                    f"goal result wait failed: {error}; "
+                    f"{'goal canceled' if cancelled else 'goal remains unresolved; call stop() or close()'}"
+                ),
+            )
+        if outcome.status == "timeout":
+            # Cancel before reading feedback so a timeout cannot leave the old
+            # trajectory running while the caller receives a safe failure.
+            cancelled = self._cancel_silent(goal)
+            if cancelled:
+                self._active_goal = None
+            measured = self._safe_state()
+            tracking = (
+                f"; measured={dict(measured.positions)}" if measured is not None else ""
+            )
+            return self._receipt(
+                command,
+                accepted=False,
+                detail=(
+                    f"goal timed out after {self._config.goal_timeout_s}s without a result; "
+                    f"{'goal canceled' if cancelled else 'goal remains unresolved; call stop() or close()'}"
+                    f"{tracking}"
+                ),
+            )
+        self._active_goal = None
         measured = self._safe_state()
         tracking = ""
         if measured is not None:
             tracking = f"; measured={dict(measured.positions)}"
-        if outcome.status == "timeout":
-            return self._receipt(
-                command,
-                accepted=False,
-                detail=f"goal timed out after {self._config.goal_timeout_s}s "
-                f"without a result{tracking}",
-            )
         if not outcome.succeeded:
             return self._receipt(
                 command,
@@ -359,18 +398,33 @@ class IsaacRos2ControlAdapter:
         )
 
     def stop(self) -> None:
-        """Hold the last measured positions for one short trajectory.
+        """Cancel any unresolved goal, then hold at the last measured positions.
 
-        This re-targets the current positions through the controller; it is a
-        command stream hold, not an E-stop and not a controller deactivation.
+        This is a command-stream hold: it cancels an in-flight FollowJointTrajectory
+        goal (best effort, bounded by ``goal_timeout_s``), then re-targets the
+        freshest measured positions with one short trajectory. It is not an
+        E-stop, controller deactivation, collision response, or hardware safety
+        mechanism; Isaac's playback-tied controller manager remains the final
+        authority on motion.
         """
         self._require_connected()
+        client = self._transport.trajectory_client
+        if self._active_goal is not None:
+            goal = self._active_goal
+            if not self._cancel_silent(goal):
+                # Do not send a competing hold trajectory while the preceding
+                # goal might still be driving the controller. Keep the adapter
+                # blocked until the caller closes/reconnects it.
+                raise Ros2TransportError(
+                    "stop() could not confirm cancellation of the active goal; "
+                    "no hold command was sent"
+                )
+            self._active_goal = None
         measured = self._safe_state()
         if measured is None:
             raise Ros2TransportError(
                 "stop() needs a fresh JointState; no state received yet"
             )
-        client = self._transport.trajectory_client
         names = list(self.profile.joint_map())
         goal = client.send_goal(
             names,
@@ -383,6 +437,7 @@ class IsaacRos2ControlAdapter:
 
     def close(self) -> None:
         self._connected = False
+        self._active_goal = None
         if self._owned_transport and self._transport is not None:
             self._transport.close()
             self._transport = None
@@ -434,6 +489,18 @@ class IsaacRos2ControlAdapter:
             return self.get_state()
         except Ros2TransportError:
             return None
+
+    def _cancel_silent(self, goal: GoalHandleLike) -> bool:
+        """Best-effort bounded cancellation that never masks a timeout report."""
+        try:
+            return bool(
+                self._transport.trajectory_client.cancel_goal(
+                    goal, self._config.goal_timeout_s
+                )
+            )
+        except Exception:
+            return False
+
 
     def _safe_state_snapshot(self) -> Mapping[str, float]:
         state = self._safe_state()
@@ -623,6 +690,23 @@ class _RclpyTrajectoryClient:
             error_code=int(error_code) if error_code is not None else None,
             detail=detail,
         )
+
+    def cancel_goal(self, goal: GoalHandleLike, timeout_s: float) -> bool:
+        """Request cancellation and wait for the goal to reach a terminal state."""
+        handle = goal._handle
+        cancel_future = handle.cancel_goal_async()
+        deadline = time.monotonic() + timeout_s
+        while not cancel_future.done() and time.monotonic() < deadline:
+            self._spin()
+        if not cancel_future.done():
+            return False
+        # The cancel response only acknowledges the request; the goal must also
+        # reach a terminal state (CANCELED/ABORTED/SUCCEEDED) before returning.
+        result_future = handle.get_result_async()
+        deadline = time.monotonic() + timeout_s
+        while not result_future.done() and time.monotonic() < deadline:
+            self._spin()
+        return result_future.done()
 
     def _build_goal(
         self,

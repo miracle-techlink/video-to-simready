@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from simready.robotics.contracts import RobotProfile, RobotState
+from simready.robotics.contracts import CommandReceipt, RobotProfile, RobotState
 from simready.robotics.policy_loop import (
     PolicyAdapterLoop,
     PolicyLoopConfig,
@@ -598,6 +598,132 @@ def test_invalid_pre_command_state_sends_no_command():
     ).run_once(instructions="go", observation={})
     assert result.status == "state_invalid"
     assert result.dispatched is False
+
+
+@pytest.mark.parametrize("attribute", ["positions", "received_monotonic_ns"])
+def test_malformed_state_type_errors_fail_closed_not_crash(attribute):
+    # A transport that returns a malformed contract object (None fields,
+    # non-int timestamp) must produce a state_invalid result, not an unhandled
+    # TypeError escaping run_once's fail-closed contract.
+    class MalformedStateAdapter:
+        execution_mode = "simulation"
+        profile = PROFILE
+
+        def get_state(self, *, timeout_s):
+            return RobotState(
+                positions={name: 0.0 for name in ALL_JOINTS},
+                received_monotonic_ns=(None if attribute == "received_monotonic_ns" else 10_000_000_000),
+            )
+
+        def send_joint_position(self, command):
+            raise AssertionError("must not dispatch")
+
+    result = PolicyAdapterLoop(
+        FakePolicy(valid_decision()), MalformedStateAdapter(), FakeVerifier(), CONFIG
+    ).run_once(instructions="go", observation={})
+    if attribute == "received_monotonic_ns":
+        assert result.status == "state_invalid"
+        assert "cannot convert" in result.detail or "None" in result.detail
+        assert result.dispatched is False
+    else:
+        assert result.status in {"state_invalid", "validation_failed"}
+        assert result.dispatched is False
+
+
+def test_adapter_exception_after_dispatch_fails_closed_without_success_claim():
+    # send_joint_position raising must surface as adapter_error with no receipt
+    # and never re-report the loop's last verified status.
+    class ExplodingAdapter:
+        execution_mode = "simulation"
+        profile = PROFILE
+
+        def get_state(self, *, timeout_s):
+            return RobotState(
+                positions={name: 0.0 for name in ALL_JOINTS},
+                received_monotonic_ns=10_000_000_000,
+            )
+
+        def send_joint_position(self, command):
+            raise RuntimeError("transport exploded")
+
+    clock = FakeClock()
+    loop = PolicyAdapterLoop(
+        FakePolicy(valid_decision()),
+        ExplodingAdapter(),
+        FakeVerifier(),
+        CONFIG,
+        now_monotonic_ns=clock.now_ns,
+    )
+    result = loop.run_once(instructions="go", observation={})
+    assert result.status == "adapter_error"
+    assert result.dispatched is False
+    assert "transport exploded" in result.detail
+
+
+def test_adapter_timeout_after_dispatch_reports_timeout():
+    class TimingOutAdapter:
+        execution_mode = "simulation"
+        profile = PROFILE
+
+        def get_state(self, *, timeout_s):
+            return RobotState(
+                positions={name: 0.0 for name in ALL_JOINTS},
+                received_monotonic_ns=10_000_000_000,
+            )
+
+        def send_joint_position(self, command):
+            raise TimeoutError("goal watchdog expired")
+
+    result = PolicyAdapterLoop(
+        FakePolicy(valid_decision()),
+        TimingOutAdapter(),
+        FakeVerifier(),
+        CONFIG,
+        now_monotonic_ns=FakeClock().now_ns,
+    ).run_once(instructions="go", observation={})
+    assert result.status == "adapter_timeout"
+    assert result.dispatched is False
+    assert "watchdog" in result.detail
+
+
+def test_sequence_wedge_on_adpater_exception_does_not_lock_sequence():
+    # A valid command whose dispatch raises still consumes its sequence slot:
+    # the next run's command uses sequence+1, not a reused lower value that
+    # the adapter's monotonic check would then reject.
+    class FirstExplodingAdapter:
+        execution_mode = "simulation"
+        profile = PROFILE
+        calls = 0
+
+        def get_state(self, *, timeout_s):
+            return RobotState(
+                positions={name: 0.0 for name in ALL_JOINTS},
+                received_monotonic_ns=10_000_000_000,
+            )
+
+        def send_joint_position(self, command):
+            FirstExplodingAdapter.calls += 1
+            if FirstExplodingAdapter.calls == 1:
+                raise RuntimeError("first dispatch explodes")
+            return CommandReceipt(
+                sequence=command.sequence,
+                accepted=True,
+                accepted_monotonic_ns=10_000_000_000,
+            )
+
+    clock = FakeClock()
+    loop = PolicyAdapterLoop(
+        FakePolicy(valid_decision()),
+        FirstExplodingAdapter(),
+        FakeVerifier(),
+        CONFIG,
+        now_monotonic_ns=clock.now_ns,
+    )
+    first = loop.run_once(instructions="go", observation={})
+    assert first.status == "adapter_error"
+    second = loop.run_once(instructions="go", observation={})
+    assert second.status == "verified"
+    assert (first.command.sequence, second.command.sequence) == (0, 1)
 
 
 # -- failures after dispatch -----------------------------------------------

@@ -197,15 +197,9 @@ class PolicyAdapterLoop:
             return PolicyLoopResult(status="state_timeout", detail=str(error))
         except Exception as error:
             return PolicyLoopResult(status="state_error", detail=str(error))
-        try:
-            validate_robot_state(
-                self._adapter.profile,
-                state_before,
-                now_monotonic_ns=self._now_monotonic_ns(),
-                max_age_s=self._config.state_timeout_s,
-            )
-        except ValueError as error:
-            return PolicyLoopResult(status="state_invalid", detail=str(error))
+        state_error = self._state_validation_error(state_before)
+        if state_error is not None:
+            return PolicyLoopResult(status="state_invalid", detail=state_error)
 
         policy_observation = {
             "caller_observation": dict(observation),
@@ -281,17 +275,11 @@ class PolicyAdapterLoop:
         # Inference latency may also have aged that state since it was read, so
         # revalidate freshness against the same observation immediately before
         # dispatch: a stale-but-valid contract command must not be sent.
-        try:
-            validate_robot_state(
-                self._adapter.profile,
-                state_before,
-                now_monotonic_ns=self._now_monotonic_ns(),
-                max_age_s=self._config.state_timeout_s,
-            )
-        except ValueError as error:
+        state_error = self._state_validation_error(state_before)
+        if state_error is not None:
             return PolicyLoopResult(
                 status="state_invalid",
-                detail=f"pre-dispatch state no longer fresh: {error}",
+                detail=f"pre-dispatch state no longer fresh: {state_error}",
                 command=command,
                 state_before=state_before,
             )
@@ -309,6 +297,10 @@ class PolicyAdapterLoop:
         try:
             receipt = self._adapter.send_joint_position(command)
         except TimeoutError as error:
+            # The dispatch consumed its sequence slot even though the adapter
+            # failed: never reissue the same or a lower sequence, which the
+            # adapter's monotonic check would reject.
+            self._last_sequence = command.sequence
             return PolicyLoopResult(
                 status="adapter_timeout",
                 detail=str(error),
@@ -316,6 +308,10 @@ class PolicyAdapterLoop:
                 state_before=state_before,
             )
         except Exception as error:
+            # Unknown failure: the command may or may not have reached the
+            # transport, so consume its sequence defensively. A retry uses the
+            # next value; the adapter still enforces monotonicity itself.
+            self._last_sequence = command.sequence
             return PolicyLoopResult(
                 status="adapter_error",
                 detail=str(error),
@@ -352,17 +348,11 @@ class PolicyAdapterLoop:
                 receipt=receipt,
                 state_before=state_before,
             )
-        try:
-            validate_robot_state(
-                self._adapter.profile,
-                state_after,
-                now_monotonic_ns=self._now_monotonic_ns(),
-                max_age_s=self._config.state_timeout_s,
-            )
-        except ValueError as error:
+        state_error = self._state_validation_error(state_after)
+        if state_error is not None:
             return PolicyLoopResult(
                 status="post_state_invalid",
-                detail=str(error),
+                detail=state_error,
                 command=command,
                 receipt=receipt,
                 state_before=state_before,
@@ -403,6 +393,19 @@ class PolicyAdapterLoop:
             state_after=state_after,
             verification=verification,
         )
+
+    def _state_validation_error(self, state: RobotState) -> str | None:
+        """Return a fail-closed detail for any malformed or stale feedback."""
+        try:
+            validate_robot_state(
+                self._adapter.profile,
+                state,
+                now_monotonic_ns=self._now_monotonic_ns(),
+                max_age_s=self._config.state_timeout_s,
+            )
+        except Exception as error:
+            return str(error)
+        return None
 
 
 def _joint_step_error(

@@ -80,7 +80,12 @@ command against a stale pre-inference observation.
 Provider/state/verifier timeouts, policy refusal/no-tool/unknown-tool results,
 malformed or invalid arguments, adapter rejection, and bad feedback all return
 explicit fail-closed statuses. In particular, no tool/validation/policy failure
-sends a command. The injected adapter remains responsible for its own transport
+sends a command. Malformed feedback — wrong joint sets, non-numeric values, or
+a broken timestamp that makes validation itself raise — is also mapped to
+`state_invalid`/`post_state_invalid` rather than escaping `run_once`. A
+dispatch attempt that raises or times out consumes its sequence slot and
+returns `adapter_error`/`adapter_timeout` without a receipt, so a retry always
+uses a strictly higher sequence and never claims action success. The injected adapter remains responsible for its own transport
 and low-level delta/timeout enforcement. The verifier's `timeout_s` is a
 cooperative deadline the verifier enforces itself: the loop reports
 `verification_timeout` when the verifier signals timeout, but does not

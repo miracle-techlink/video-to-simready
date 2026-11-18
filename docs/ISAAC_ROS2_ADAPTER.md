@@ -180,17 +180,36 @@ remain empty; populated arrays must align with names.
 2. applies the configured per-joint delta cap against measured feedback;
 3. sends a one-point trajectory in the profile group order;
 4. waits for the action result with a bounded watchdog;
-5. returns `CommandReceipt(accepted=False, ...)` on goal rejection, abort,
+5. on timeout, cancels the in-flight goal before returning the receipt;
+6. returns `CommandReceipt(accepted=False, ...)` on goal rejection, abort,
    preemption, or timeout so a policy host can report the error and continue.
 
 Once an action server accepts a goal, its sequence is consumed even if its
 terminal result later fails: retries must use a new sequence. A goal rejected
 before acceptance does not consume the sequence.
 
-`stop()` sends a short hold-at-measured-position trajectory. It is **not an
-E-stop**, controller deactivation, collision response, or hardware safety
-mechanism. This adapter is for Isaac simulation only; it never marks the
-reBot hardware profile verified.
+Timeout and cancellation semantics: when the result watchdog expires, the
+adapter requests goal cancellation and waits (bounded again by
+`goal_timeout_s`) for the goal to reach a terminal state before returning
+`accepted=False`. If cancellation succeeds, the next command is accepted
+normally. If cancellation cannot be confirmed (the cancel response or the
+terminal result never arrives), the adapter holds a fail-closed state and
+raises `Ros2TransportError` on further `send_joint_position()` and `stop()`
+calls until `close()` (a confirmed `stop()` cancel also re-syncs sends); it
+never silently continues a trajectory whose outcome is unknown. The same
+protection applies when `wait_for_result` itself raises: the adapter attempts
+one bounded cancellation and reports the failure rather than assuming the
+goal died.
+
+`stop()` cancels any unresolved in-flight goal (bounded by `goal_timeout_s`).
+If cancellation is confirmed, it then sends a short
+hold-at-measured-position trajectory re-targeting the freshest measured
+positions; if cancellation cannot be confirmed, it raises
+`Ros2TransportError` and sends nothing, because a hold trajectory would
+compete with a goal that may still be running. It is **not an E-stop**,
+controller deactivation, collision response, or hardware safety mechanism.
+This adapter is for Isaac simulation only; it never marks the reBot hardware
+profile verified.
 
 ## Required live-smoke procedure
 
