@@ -36,6 +36,11 @@ class IsaacSimArticulationAdapter:
         self._connected = False
         self._last_sequence = -1
 
+    @property
+    def execution_mode(self) -> str:
+        """This adapter only ever drives the in-process Isaac simulation."""
+        return "simulation"
+
     def connect(self) -> None:
         missing = set(self.profile.joint_map()) - set(self._joint_names)
         if missing:

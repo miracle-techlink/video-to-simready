@@ -231,6 +231,11 @@ class IsaacRos2ControlAdapter:
     def config(self) -> Ros2AdapterConfig:
         return self._config
 
+    @property
+    def execution_mode(self) -> str:
+        """This adapter drives Isaac-hosted ros2_control simulation only."""
+        return "simulation"
+
     def connect(self) -> None:
         if self._connected:
             return

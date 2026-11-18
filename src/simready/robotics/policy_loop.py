@@ -37,6 +37,7 @@ class PolicyLoopConfig:
     group: str
     tool_name: str
     command_valid_for_s: float = 2.0
+    max_joint_step_rad: float = 0.08
     state_timeout_s: float = 0.5
     verification_timeout_s: float = 0.5
 
@@ -45,6 +46,7 @@ class PolicyLoopConfig:
             raise ValueError("group and tool_name must be nonempty")
         for name in (
             "command_valid_for_s",
+            "max_joint_step_rad",
             "state_timeout_s",
             "verification_timeout_s",
         ):
@@ -93,11 +95,18 @@ class PolicyProvider(Protocol):
         instructions: str,
         observation: Mapping[str, Any],
         tools: Sequence[Mapping[str, Any]],
+        image_data_urls: Sequence[str] = (),
     ) -> PolicyDecision: ...
 
 
 class FeedbackVerifier(Protocol):
-    """Independent post-command feedback check supplied by the host."""
+    """Independent post-command feedback check supplied by the host.
+
+    ``timeout_s`` is a cooperative deadline the verifier must enforce itself;
+    the loop reports a ``verification_timeout`` result only if the verifier
+    signals it (for example by raising ``TimeoutError``). The loop itself does
+    not interrupt a verifier that overruns.
+    """
 
     def verify(
         self,
@@ -122,6 +131,15 @@ class PolicyAdapterLoop:
         *,
         now_monotonic_ns: Callable[[], int] = time.monotonic_ns,
     ) -> None:
+        # Simulation scope is an explicit adapter capability, never inferred from
+        # the profile's commissioning flags: a profile carrying an uncommissioned
+        # hardware command transport must not make an injected adapter physical.
+        execution_mode = getattr(adapter, "execution_mode", None)
+        if execution_mode != "simulation":
+            raise ValueError(
+                "PolicyAdapterLoop requires an adapter that declares "
+                "execution_mode='simulation' explicitly"
+            )
         if adapter.profile.hardware_verified:
             raise ValueError(
                 "PolicyAdapterLoop permits simulation-compatible adapters only"
@@ -158,7 +176,11 @@ class PolicyAdapterLoop:
         )
 
     def run_once(
-        self, *, instructions: str, observation: Mapping[str, Any]
+        self,
+        *,
+        instructions: str,
+        observation: Mapping[str, Any],
+        image_data_urls: Sequence[str] = (),
     ) -> PolicyLoopResult:
         """Run one bounded step; any failure returns without an unsafe dispatch."""
         try:
@@ -192,6 +214,7 @@ class PolicyAdapterLoop:
                 instructions=instructions,
                 observation=policy_observation,
                 tools=self.tool_schema,
+                image_data_urls=tuple(image_data_urls),
             )
         except QwenTimeoutError as error:
             return PolicyLoopResult(
@@ -243,6 +266,19 @@ class PolicyAdapterLoop:
             return PolicyLoopResult(
                 status="validation_failed",
                 detail=str(error),
+                command=command,
+                state_before=state_before,
+            )
+
+        # Profile limits alone do not bound one policy step: reject targets whose
+        # per-joint delta from the measured pre-command state exceeds the cap.
+        step_error = _joint_step_error(
+            command, state_before, self._config.max_joint_step_rad
+        )
+        if step_error is not None:
+            return PolicyLoopResult(
+                status="step_limit_exceeded",
+                detail=step_error,
                 command=command,
                 state_before=state_before,
             )
@@ -344,3 +380,17 @@ class PolicyAdapterLoop:
             state_after=state_after,
             verification=verification,
         )
+
+
+def _joint_step_error(
+    command: JointCommand, state_before: RobotState, max_joint_step_rad: float
+) -> str | None:
+    """Return a rejection detail when a target exceeds the measured step cap."""
+    deltas = {
+        name: abs(command.positions[name] - state_before.positions[name])
+        for name in command.positions
+    }
+    worst = max(deltas.values(), default=0.0)
+    if worst <= max_joint_step_rad:
+        return None
+    return f"command exceeds per-joint step cap {max_joint_step_rad}: {deltas}"

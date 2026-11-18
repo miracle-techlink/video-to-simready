@@ -50,6 +50,19 @@ TARGETS = {
     "joint6": 0.02,
 }
 CONFIG = PolicyLoopConfig(group="arm", tool_name="set_arm_joint_targets")
+CONFIG_TOOLS = (
+    {
+        "type": "function",
+        "function": {
+            "name": CONFIG.tool_name,
+            "parameters": {
+                "type": "object",
+                "properties": {name: {"type": "number"} for name in ARM},
+                "required": ARM,
+            },
+        },
+    },
+)
 TEST_KEY = "test-only-credential"
 
 
@@ -195,8 +208,14 @@ class FakePolicy:
         self.error = error
         self.seen: list[dict] = []
 
-    def decide(self, *, instructions, observation, tools):
-        self.seen.append({"observation": dict(observation), "tools": tools})
+    def decide(self, *, instructions, observation, tools, image_data_urls=()):
+        self.seen.append(
+            {
+                "observation": dict(observation),
+                "tools": tools,
+                "image_data_urls": tuple(image_data_urls),
+            }
+        )
         if self.error is not None:
             raise self.error
         return self.decision
@@ -242,10 +261,14 @@ def qwen_env(monkeypatch):
 def test_configuration_and_adapter_scope_fail_closed():
     with pytest.raises(ValueError, match="positive number"):
         PolicyLoopConfig(group="arm", tool_name="move", state_timeout_s=0)
+    with pytest.raises(ValueError, match="max_joint_step_rad"):
+        PolicyLoopConfig(group="arm", tool_name="move", max_joint_step_rad=0)
 
     class HardwareAdapter:
         # A frozen dataclass profile cannot be flagged hardware-verified without
         # mutating the shared one, so build a locally flagged profile.
+        execution_mode = "simulation"
+
         profile = RobotProfile(
             robot_id="hw-test-robot",
             display_name="Hardware Test Robot",
@@ -265,6 +288,115 @@ def test_configuration_and_adapter_scope_fail_closed():
 
     with pytest.raises(ValueError, match="simulation-compatible"):
         PolicyAdapterLoop(FakePolicy(), HardwareAdapter(), FakeVerifier(), CONFIG)
+
+
+def test_adapter_without_simulation_execution_mode_is_rejected():
+    # The reBot profile ships an uncommissioned hardware command transport with
+    # hardware_verified=False. A generic injected adapter without an explicit
+    # simulation execution mode must be rejected even though the profile is not
+    # hardware-verified: the commissioning flag alone proves nothing physical.
+    class UnmarkedAdapter:
+        profile = PROFILE
+
+        def get_state(self, *, timeout_s):
+            raise AssertionError("must not run without simulation capability")
+
+        def send_joint_position(self, command):
+            raise AssertionError("must not run without simulation capability")
+
+    assert PROFILE.hardware_command_transport is not None
+    assert PROFILE.hardware_verified is False
+    with pytest.raises(ValueError, match="execution_mode='simulation'"):
+        PolicyAdapterLoop(FakePolicy(), UnmarkedAdapter(), FakeVerifier(), CONFIG)
+
+
+def test_simulation_adapters_declare_execution_mode():
+    # Both production simulation adapters expose the marker the loop requires.
+    from simready.robotics.isaac_sim import IsaacSimArticulationAdapter
+
+    ros2_adapter, _, _ = make_adapter()
+    assert ros2_adapter.execution_mode == "simulation"
+    marker = getattr(IsaacSimArticulationAdapter, "execution_mode", None)
+    assert isinstance(marker, property) and marker.fget.__name__ == "execution_mode"
+
+
+def test_oversized_within_profile_delta_sends_no_goal():
+    # joint1 target 1.4 rad is inside the profile limits but far beyond the
+    # default 0.08 rad per-step cap measured against state_before.
+    arguments = {**TARGETS, "joint1": 1.4}
+    decision = PolicyDecision(
+        calls=(ToolCall(name=CONFIG.tool_name, arguments=arguments),)
+    )
+    adapter, transport, clock = make_adapter()
+    result = loop_for(FakePolicy(decision), adapter, FakeVerifier(), clock).run_once(
+        instructions="go", observation={}
+    )
+    assert result.status == "step_limit_exceeded"
+    assert "step cap" in result.detail
+    assert result.dispatched is False
+    assert transport.trajectory_client.sent == []
+    # A later step within the cap is unaffected.
+    ok = loop_for(
+        FakePolicy(valid_decision()), adapter, FakeVerifier(), clock
+    ).run_once(instructions="go", observation={})
+    assert ok.status == "verified"
+
+
+def test_boundary_delta_at_step_cap_is_allowed():
+    arguments = {**TARGETS, "joint1": CONFIG.max_joint_step_rad}
+    decision = PolicyDecision(
+        calls=(ToolCall(name=CONFIG.tool_name, arguments=arguments),)
+    )
+    adapter, _, clock = make_adapter()
+    result = loop_for(FakePolicy(decision), adapter, FakeVerifier(), clock).run_once(
+        instructions="go", observation={}
+    )
+    assert result.status == "verified"
+
+
+def test_observation_image_propagates_through_provider_without_logging_bytes(qwen_env):
+    # The loop forwards the caller's observation mapping verbatim; a data-URL
+    # image placed in it reaches the provider request exactly once as JSON
+    # text, and the raw data URL never leaks into result detail.
+    adapter, _, clock = make_adapter()
+    image = "data:image/png;base64,YWJjZGU="
+    http = FakeQwenTransport(tool_call_response(TARGETS))
+    loop = loop_for(QwenPolicyProvider(transport=http), adapter, FakeVerifier(), clock)
+    result = loop.run_once(
+        instructions="choose safe targets",
+        observation={"task": "x", "image_data_urls": [image]},
+    )
+    assert result.status == "verified"
+    (request,) = http.seen
+    content = request["body"]["messages"][-1]["content"]
+    assert content.count(image) == 1
+    assert image not in result.detail
+    assert image not in str(result)
+
+
+def test_image_data_urls_reach_provider_vision_blocks(monkeypatch):
+    # The provider's own image_data_urls channel is the vision path: images the
+    # host attaches there must become OpenAI image content blocks, and the loop
+    # result must never contain the bytes.
+    monkeypatch.setenv("QWEN_BASE_URL", "https://qwen.test/v1/chat/completions")
+    monkeypatch.setenv("QWEN_MODEL", "qwen-3.8-test")
+    monkeypatch.setenv("QWEN_API_KEY", TEST_KEY)
+    adapter, _, clock = make_adapter()
+    image = "data:image/png;base64,YWJjZGU="
+    http = FakeQwenTransport(tool_call_response(TARGETS))
+    provider = QwenPolicyProvider(transport=http)
+    decision = provider.decide(
+        instructions="inspect",
+        observation={"task": "x"},
+        tools=CONFIG_TOOLS,
+        image_data_urls=[image],
+    )
+    assert decision.refusal is False
+    (request,) = http.seen
+    content = request["body"]["messages"][-1]["content"]
+    assert isinstance(content, list)
+    assert content[1] == {"type": "image_url", "image_url": {"url": image}}
+    assert image not in str(decision)
 
 
 def test_tool_schema_is_exactly_the_commandable_arm_group():
@@ -390,6 +522,7 @@ def test_policy_timeout_or_error_sends_no_command(error, status):
 
 def test_initial_state_timeout_sends_no_command():
     class TimeoutAdapter:
+        execution_mode = "simulation"
         profile = PROFILE
 
         def get_state(self, *, timeout_s):
@@ -407,6 +540,7 @@ def test_initial_state_timeout_sends_no_command():
 
 def test_invalid_pre_command_state_sends_no_command():
     class InvalidStateAdapter:
+        execution_mode = "simulation"
         profile = PROFILE
 
         def get_state(self, *, timeout_s):

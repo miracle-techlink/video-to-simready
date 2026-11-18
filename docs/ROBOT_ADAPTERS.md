@@ -61,13 +61,25 @@ state and passes both states, the command, and the receipt to the verifier. The
 verifier's result is the only source of the `verified` status; a model response
 is never task-success evidence.
 
-The loop is simulation-only: construction rejects profiles with
-`hardware_verified=True`, and it cannot create transports or import ROS/Isaac.
+The loop is simulation-only by explicit adapter capability, not by profile
+inference: construction requires the adapter to expose
+`execution_mode == "simulation"` (both Isaac adapters do), and additionally
+rejects `hardware_verified=True` profiles. A profile carrying an
+uncommissioned hardware command transport does **not** make a generic injected
+adapter acceptable — the commissioning flag alone is not physical protection.
+The loop cannot create transports or import ROS/Isaac.
+
+Per-step motion is bounded twice: profile limits via `validate_joint_command`,
+then `max_joint_step_rad` (default 0.08) against the measured pre-command
+state, so an in-limit but oversized single step is rejected before dispatch.
 Provider/state/verifier timeouts, policy refusal/no-tool/unknown-tool results,
 malformed or invalid arguments, adapter rejection, and bad feedback all return
 explicit fail-closed statuses. In particular, no tool/validation/policy failure
 sends a command. The injected adapter remains responsible for its own transport
-and low-level delta/timeout enforcement.
+and low-level delta/timeout enforcement. The verifier's `timeout_s` is a
+cooperative deadline the verifier enforces itself: the loop reports
+`verification_timeout` when the verifier signals timeout, but does not
+interrupt one that overruns.
 
 CPU-only fake tests exercise this sequence and its rejection paths. They are
 synthetic integration evidence only, **not** a Qwen live-inference PASS, Isaac
