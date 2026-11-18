@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import os
-import socket
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
@@ -69,14 +68,24 @@ class Gpt56MessagesTransport:
     ) -> Mapping[str, Any]:
         """Send adapted request and return a chat-completions-compatible response."""
         base_url, api_key, expected_model = self._resolve_environment()
+        configured_model = os.environ.get(self.config.model_env, "").strip()
+        requested_model = body.get("model")
+        if not isinstance(requested_model, str) or requested_model != configured_model:
+            raise QwenResponseError(
+                "request model identity does not match the configured GPT-5.6 model"
+            )
         try:
             payload = _to_messages_payload(body, self.config.max_tokens)
         except (KeyError, TypeError, ValueError) as error:
-            raise QwenResponseError("policy request cannot be converted to Messages API") from error
+            raise QwenResponseError(
+                "policy request cannot be converted to Messages API"
+            ) from error
         try:
             encoded = json.dumps(payload).encode("utf-8")
         except (TypeError, ValueError) as error:
-            raise QwenResponseError("Messages request is not JSON serializable") from error
+            raise QwenResponseError(
+                "Messages request is not JSON serializable"
+            ) from error
         request = urllib.request.Request(
             base_url,
             data=encoded,
@@ -91,22 +100,26 @@ class Gpt56MessagesTransport:
             with urllib.request.urlopen(request, timeout=timeout_s) as response:
                 raw = response.read()
         except urllib.error.HTTPError as error:
-            raise QwenApiError(error.code, _safe_http_detail(error.reason)) from error
+            raise QwenApiError(error.code, _http_detail(error.code)) from error
         except urllib.error.URLError as error:
             if _is_timeout(error.reason):
                 raise QwenTimeoutError("GPT-5.6 Messages endpoint timed out") from error
             raise QwenApiError(0, "connection failed") from error
-        except (TimeoutError, socket.timeout) as error:
+        except TimeoutError as error:
             raise QwenTimeoutError("GPT-5.6 Messages endpoint timed out") from error
         try:
             response_body = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise QwenResponseError("Messages response body is not valid JSON") from error
+            raise QwenResponseError(
+                "Messages response body is not valid JSON"
+            ) from error
         if not isinstance(response_body, Mapping):
             raise QwenResponseError("Messages response body is not a JSON object")
         actual_model = response_body.get("model")
         if not isinstance(actual_model, str) or actual_model != expected_model:
-            raise QwenResponseError("GPT-5.6 response model identity does not match configuration")
+            raise QwenResponseError(
+                "GPT-5.6 response model identity does not match configuration"
+            )
         return _to_chat_response(response_body)
 
     def _resolve_environment(self) -> tuple[str, str, str]:
@@ -125,7 +138,9 @@ class Gpt56MessagesTransport:
             raise QwenConfigError(f"{self.config.base_url_env} must be an http(s) URL")
         configured_model = os.environ.get(self.config.model_env, "").strip()
         if not configured_model:
-            raise QwenConfigError(f"Set {self.config.model_env} in the worker environment")
+            raise QwenConfigError(
+                f"Set {self.config.model_env} in the worker environment"
+            )
         if not self._is_consistent_model(configured_model, expected_model):
             raise QwenConfigError(
                 "configured GPT-5.6 model must match the expected model identity"
@@ -143,7 +158,11 @@ def _to_messages_payload(body: Mapping[str, Any], max_tokens: int) -> dict[str, 
     messages = body["messages"]
     tools = body["tools"]
     model = body["model"]
-    if not isinstance(messages, list) or not isinstance(tools, list) or not isinstance(model, str):
+    if (
+        not isinstance(messages, list)
+        or not isinstance(tools, list)
+        or not isinstance(model, str)
+    ):
         raise ValueError("invalid provider request envelope")
     system: list[str] = []
     output_messages: list[dict[str, Any]] = []
@@ -229,8 +248,16 @@ def _to_chat_response(response: Mapping[str, Any]) -> Mapping[str, Any]:
             raise QwenResponseError("Messages content block must be a mapping")
         if block.get("type") != "tool_use":
             continue
-        name, call_id, arguments = block.get("name"), block.get("id"), block.get("input")
-        if not isinstance(name, str) or not isinstance(call_id, str) or not isinstance(arguments, Mapping):
+        name, call_id, arguments = (
+            block.get("name"),
+            block.get("id"),
+            block.get("input"),
+        )
+        if (
+            not isinstance(name, str)
+            or not isinstance(call_id, str)
+            or not isinstance(arguments, Mapping)
+        ):
             raise QwenResponseError("Messages tool-use block is malformed")
         calls.append(
             {
@@ -240,7 +267,15 @@ def _to_chat_response(response: Mapping[str, Any]) -> Mapping[str, Any]:
             }
         )
     stop_reason = response.get("stop_reason")
-    finish_reason = "tool_calls" if calls else (stop_reason if isinstance(stop_reason, str) else "stop")
+    if not isinstance(stop_reason, str) or stop_reason not in ("tool_use", "end_turn"):
+        raise QwenResponseError(
+            f"Messages response stopped with unsupported reason {stop_reason!r}"
+        )
+    if calls and stop_reason != "tool_use":
+        raise QwenResponseError(
+            "Messages response contains tool calls but stopped without completing them"
+        )
+    finish_reason = "tool_calls" if calls else "stop"
     result: dict[str, Any] = {
         "choices": [{"finish_reason": finish_reason, "message": {"tool_calls": calls}}],
     }
@@ -253,6 +288,18 @@ def _is_timeout(reason: object) -> bool:
     return isinstance(reason, TimeoutError) or "timeout" in str(reason).lower()
 
 
-def _safe_http_detail(reason: object) -> str:
-    text = str(reason).replace("\n", " ").strip()
-    return text[:120] if text else "request failed"
+_HTTP_STATUS_DETAILS = {
+    401: "unauthorized",
+    403: "forbidden",
+    404: "not found",
+    429: "rate limited",
+    500: "server error",
+    502: "bad gateway",
+    503: "service unavailable",
+    504: "gateway timeout",
+}
+
+
+def _http_detail(status: int) -> str:
+    """Map a numeric status to a fixed reason; upstream text may carry secrets."""
+    return _HTTP_STATUS_DETAILS.get(status, "request failed")

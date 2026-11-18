@@ -30,19 +30,28 @@ are intentionally explicit and independent of global router configuration:
 `Gpt56MessagesConfig` permits naming alternative environment variables without
 putting credentials, a socket path, or a deployment endpoint into library code.
 The requested alias must equal the expected identity or be its prefix before a
-dated snapshot suffix. More importantly, every successful response must return
-an exact `model` equal to `GPT56_MESSAGES_EXPECTED_MODEL`; a gateway fallback
-or identity mismatch fails closed before tool-call parsing.
+dated snapshot suffix, and the model in the outgoing request body must equal
+the configured model before any request is sent. More importantly, every
+successful response must return an exact `model` equal to
+`GPT56_MESSAGES_EXPECTED_MODEL`; a gateway fallback or identity mismatch fails
+closed before tool-call parsing.
 
-HTTP errors carry only numeric status plus a short sanitized reason. Network
-failures, timeouts, malformed JSON, malformed `tool_use`, and conversion errors
-are typed `QwenPolicyError` subclasses and fail closed. The implementation does
-not log credential values.
+Only Messages stop reasons `tool_use` and `end_turn` are accepted. A truncated
+response (`max_tokens`, unknown or missing stop reason) fails closed even when
+`tool_use` blocks are present, and tool calls with a non-`tool_use` stop reason
+are rejected as incomplete rather than dispatchable.
+
+HTTP errors carry only their numeric status plus a fixed local status class;
+upstream reason or body text is never propagated because it can contain
+credentials. Network failures, timeouts, malformed JSON, malformed `tool_use`,
+and conversion errors are typed `QwenPolicyError` subclasses and fail closed.
+The implementation does not log credential values.
 
 ## Tests and live acceptance
 
 CPU-only tests cover preserved multimodal images and tool schema conversion,
-returned-model mismatch, malformed tool-use rejection, config validation, and
+returned-model mismatch, request/configured model mismatch, malformed and
+truncated tool-use rejection, stop-reason validation, config validation, and
 sanitized timeout/HTTP failure:
 
 ```bash
