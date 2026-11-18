@@ -106,15 +106,19 @@ integration, not an end-to-end Qwen-to-ROS robot task.
 
 ## 2026-11-18 PR #31 follow-up acceptance
 
-Acceptance code tested at: `2f0450538d86ad6fd002a584c9b1dc85dbcfe91b`.
-The new synthetic Qwen→validation→ROS2 adapter tests use fake HTTP and ROS2
-transports. They pass, but their policy-to-action glue is test-local and they
-do not demonstrate a live Qwen or Isaac path.
+The policy-loop implementation is now on this PR branch after
+`2f0450538d86ad6fd002a584c9b1dc85dbcfe91b`. The production `PolicyAdapterLoop`
+connects the Qwen provider, image-bearing observations, fresh joint-state,
+canonical validation, per-step bounds, a simulation-marked adapter, and an
+independent verifier. Its CPU tests use fake HTTP and ROS2 transports; they do
+not demonstrate live inference or live Isaac control.
 
 - **Python 3.12 regression: PASS.** GitHub Actions completed `cpu-tests
   (3.12)` successfully on this head. Static checks, CPU contract tests, package
   smoke, Python 3.10, and merge gate also pass; `main-artifacts` is skipped as
-  expected for a PR.
+  expected for a PR on the preceding code head. The newly added policy-loop
+  commits have passed focused local checks (`27` policy-loop tests, `173`
+  robotics tests, Ruff, format, and architecture); their GitHub CI is pending.
 - **Qwen 3.8 live image/function-call smoke: BLOCKED.** The server-side
   configuration audit found no configured Qwen, DashScope, or Spark endpoint,
   model, or credential in the permitted environment and user/deployment
@@ -123,20 +127,23 @@ do not demonstrate a live Qwen or Isaac path.
   `/root/gpufree-data/liuyue/runs/robot-adapter-acceptance-20261118/pr31-9a21f8d/qwen-live-acceptance-receipt.json`.
   To run this gate, configure `QWEN_BASE_URL`, `QWEN_MODEL`, and `QWEN_API_KEY`
   (or the equivalent `DASHSCOPE_*` variables) in the server environment.
-- **Isaac Sim 6.2 ROS 2 action/feedback: BLOCKED.** SSH and the GPU lock are
-  available. A temporary arm-only derivative preserved the original USD and
-  excluded the gripper, which is marked untested. The controller manager
-  initializes but its Isaac system cannot create an articulation view for
-  `/World/ReBot/Geometry/base_link`; the PhysX tensor backend reports that the
-  path matches no articulations. No controller became active and no action
+- **Isaac Sim 6.2 ROS 2 action/feedback: BLOCKED.** A temporary arm-only USD
+  derivative with the articulation root relocated to the model root passed
+  composed-stage and joint-limit checks; the original USD and upstream robot
+  profiles were unchanged, and the gripper remains excluded/untested. Isaac
+  then initialized `ros2_control` and the joint-state broadcaster, but the
+  trajectory controller failed to load because the temporary YAML declares
+  `gains: {}` (`parameter_value_from failed for parameter 'gains': No
+  parameter value set`). No trajectory controller became active and no action
   goal was sent. Evidence is under
-  `/root/gpufree-data/liuyue/runs/robot-adapter-acceptance-20261118/pr31-9a21f8d/live-isaac-ros2-20261118T084527Z/`.
-  A temporary profile was narrowed to the verified USD limits; no upstream
-  robot profile or original USD was changed.
+  `/root/gpufree-data/liuyue/runs/robot-adapter-acceptance-20261118/pr31-9a21f8d/live-isaac-ros2-20261118T091116Z/`;
+  root relocation validation is
+  `/root/gpufree-data/liuyue/runs/robot-adapter-acceptance-20261118/pr31-9a21f8d/arm-only-root-articulation-20261118T090909Z/root-articulation-acceptance.json`.
 - **Live Qwen→validator→Isaac ROS 2→independent verifier: NOT_RUN.** The Qwen
   endpoint is not configured and the live ROS 2 controller is not operational.
-  The synthetic integration test is not a substitute. Production orchestration
-  remains under review for scope and implementation.
+  The synthetic tests of `PolicyAdapterLoop` are not a substitute. The verifier
+  timeout is cooperative; camera-frame freshness is the host caller's
+  responsibility.
 - **Physical reBot/G2 hardware: NOT_RUN and fail-closed.** No hardware command
   path is enabled or tested.
 
@@ -157,9 +164,9 @@ verified:
    acquire the shared GPU lock, send one small bounded
    `FollowJointTrajectory` goal through the adapter, and record its terminal
    action result plus fresh measured `/joint_states` and tracking error. Current
-   status: **BLOCKED** (server and lock are available; ROS2 control cannot
-   create an articulation view for `/World/ReBot/Geometry/base_link`; no action
-   goal was sent).
+   status: **BLOCKED** (server and lock are available; temporary root relocation
+   fixed the articulation-view lookup, but the trajectory controller will not
+   load from the current temporary YAML; no action goal was sent).
 3. **Closed-loop simulation canary:** connect the accepted Qwen provider to the
    canonical action validator and Isaac ROS 2 adapter. Send a fresh camera/state
    observation, validate the returned action, execute only the bounded
