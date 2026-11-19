@@ -622,7 +622,9 @@ def test_failed_timeout_cancellation_blocks_new_commands_until_stop():
 
 def test_stop_holds_measured_positions():
     clock = FakeClock()
-    positions = {name: 0.02 * (index + 1) for index, name in enumerate(ARM)}
+    # Keep the measured hold target within the adapter's per-joint delta cap
+    # from the preceding command's zero target.
+    positions = {name: 0.01 * (index + 1) for index, name in enumerate(ARM)}
     adapter, transport, _ = make_adapter(
         state=joint_state_message(positions), clock=clock
     )
