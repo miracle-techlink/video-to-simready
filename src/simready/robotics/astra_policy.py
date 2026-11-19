@@ -265,8 +265,8 @@ class _AstraJsonMessagesTransport:
             raise QwenResponseError("Astra action text is not strict JSON") from error
         if not isinstance(action, Mapping) or set(action) != {"tool", "arguments"}:
             raise QwenResponseError("Astra action must contain only tool and arguments")
-        name, arguments = action["tool"], action["arguments"]
-        if not isinstance(name, str) or not isinstance(arguments, Mapping):
+        requested_name, arguments = action["tool"], action["arguments"]
+        if not isinstance(requested_name, str) or not isinstance(arguments, Mapping):
             raise QwenResponseError(
                 "Astra action tool and arguments have invalid types"
             )
@@ -275,14 +275,14 @@ class _AstraJsonMessagesTransport:
             if not isinstance(entry, Mapping):
                 continue
             function = entry.get("function")
-            name = (
+            allowed_name = (
                 function.get("name")
                 if isinstance(function, Mapping)
                 else entry.get("name")
             )
-            if isinstance(name, str):
-                names.add(name)
-        if name not in names:
+            if isinstance(allowed_name, str):
+                names.add(allowed_name)
+        if requested_name not in names:
             raise QwenResponseError(
                 "Astra action requested a tool outside the allow-list"
             )
@@ -296,7 +296,7 @@ class _AstraJsonMessagesTransport:
                                 "id": "astra-json-action-0",
                                 "type": "function",
                                 "function": {
-                                    "name": name,
+                                    "name": requested_name,
                                     "arguments": json.dumps(arguments),
                                 },
                             }
