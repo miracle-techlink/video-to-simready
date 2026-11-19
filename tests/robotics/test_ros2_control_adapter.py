@@ -24,9 +24,9 @@ from simready.robotics.ros2_control_adapter import (
     MonotonicClock,
     RclpyJointState,
     RclpyTransport,
-    _RclpyTrajectoryClient,
     Ros2AdapterConfig,
     Ros2TransportError,
+    _RclpyTrajectoryClient,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -218,7 +218,9 @@ def test_config_rejects_bad_values():
         Ros2AdapterConfig(namespace="/")
 
 
-@pytest.mark.parametrize("invalid", [True, float("nan"), float("inf"), float("-inf"), "1"])
+@pytest.mark.parametrize(
+    "invalid", [True, float("nan"), float("inf"), float("-inf"), "1"]
+)
 def test_config_rejects_nonfinite_nonreal_and_bool_positive_values(invalid):
     with pytest.raises(ValueError):
         Ros2AdapterConfig(goal_timeout_s=invalid)
@@ -583,7 +585,9 @@ def test_timeout_cancels_before_returning_rejection():
     # Once cancellation reaches a terminal result, the next monotonically newer
     # command is allowed and does not continue the old trajectory.
     transport.trajectory_client.outcome = GoalOutcome(status="succeeded", error_code=0)
-    assert adapter.send_joint_position(command(target, clock=clock, sequence=2)).accepted
+    assert adapter.send_joint_position(
+        command(target, clock=clock, sequence=2)
+    ).accepted
 
 
 def test_failed_timeout_cancellation_blocks_new_commands_until_stop():
@@ -638,9 +642,7 @@ def test_stop_holds_only_the_commanded_group_not_other_joints():
     # Counterexample: with all joints in the state, stop() must not target the
     # gripper joints the controller never received; only the commanded group.
     clock = FakeClock()
-    adapter, transport, _ = make_adapter(
-        state=joint_state_message(), clock=clock
-    )
+    adapter, transport, _ = make_adapter(state=joint_state_message(), clock=clock)
     adapter.connect()
     target = {name: 0.0 for name in ARM}
     target[ARM[0]] = 0.05
@@ -680,6 +682,7 @@ def test_stop_without_state_raises():
 
 def test_stop_cancels_an_unresolved_goal_before_holding():
     clock = FakeClock()
+
     # A client whose wait_for_result never resolves leaves the goal active.
     class NeverResolvingClient(FakeTrajectoryClient):
         def wait_for_result(self, goal, timeout_s):
@@ -882,7 +885,9 @@ def test_close_with_unresolved_active_goal_latches_permanent_block():
 
 def _rclpy_client():
     node = SimpleNamespace()
-    client = _RclpyTrajectoryClient(rclpy=SimpleNamespace(), node=node, action_client=None)
+    client = _RclpyTrajectoryClient(
+        rclpy=SimpleNamespace(), node=node, action_client=None
+    )
     return client
 
 
@@ -982,7 +987,9 @@ def test_cancel_goal_fail_closed_paths(scenario):
     client._spin = lambda: None  # no progress; deadlines are wall-clock 1.0s
 
     if scenario == "cancel_goal_async_raises":
-        handle.cancel_goal_async = lambda: (_ for _ in ()).throw(RuntimeError("cancel unavailable"))
+        handle.cancel_goal_async = lambda: (_ for _ in ()).throw(
+            RuntimeError("cancel unavailable")
+        )
     elif scenario == "cancel_future_never_done":
         pass
     elif scenario == "cancel_result_raises":
@@ -995,7 +1002,9 @@ def test_cancel_goal_fail_closed_paths(scenario):
         handle._cancel_future.resolve(SimpleNamespace(return_code=0))
     elif scenario == "get_result_async_raises":
         handle._cancel_future.resolve(SimpleNamespace(return_code=0))
-        handle.get_result_async = lambda: (_ for _ in ()).throw(RuntimeError("no result channel"))
+        handle.get_result_async = lambda: (_ for _ in ()).throw(
+            RuntimeError("no result channel")
+        )
     elif scenario == "result_result_raises":
         handle._cancel_future.resolve(SimpleNamespace(return_code=0))
         handle._result_future.fail(RuntimeError("result channel broke"))

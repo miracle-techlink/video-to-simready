@@ -487,9 +487,7 @@ class IsaacRos2ControlAdapter:
             ) from error
         if not hold_goal.accepted:
             self._block_motion(f"hold goal rejected: {hold_goal.detail}")
-            raise Ros2TransportError(
-                f"hold goal rejected: {hold_goal.detail}"
-            )
+            raise Ros2TransportError(f"hold goal rejected: {hold_goal.detail}")
         self._active_goal = hold_goal
         try:
             outcome = client.wait_for_result(hold_goal, self._config.goal_timeout_s)
@@ -537,9 +535,7 @@ class IsaacRos2ControlAdapter:
         controller externally and constructing a new adapter.
         """
         if self._active_goal is not None:
-            self._block_motion(
-                "close() called with an unresolved active goal"
-            )
+            self._block_motion("close() called with an unresolved active goal")
         self._connected = False
         self._active_goal = None
         if self._owned_transport and self._transport is not None:
@@ -633,7 +629,6 @@ class IsaacRos2ControlAdapter:
             )
         except Exception:
             return False
-
 
     def _safe_state_snapshot(self) -> Mapping[str, float]:
         state = self._safe_state()

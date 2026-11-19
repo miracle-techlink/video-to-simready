@@ -612,7 +612,9 @@ def test_malformed_state_type_errors_fail_closed_not_crash(attribute):
         def get_state(self, *, timeout_s):
             return RobotState(
                 positions={name: 0.0 for name in ALL_JOINTS},
-                received_monotonic_ns=(None if attribute == "received_monotonic_ns" else 10_000_000_000),
+                received_monotonic_ns=(
+                    None if attribute == "received_monotonic_ns" else 10_000_000_000
+                ),
             )
 
         def send_joint_position(self, command):
