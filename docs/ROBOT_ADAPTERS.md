@@ -46,11 +46,13 @@ enforce workspace, speed, collision, emergency-stop, and operator-enable rules.
 ## Simulation policy-to-adapter loop
 
 `simready.robotics.policy_loop.PolicyAdapterLoop` supplies the missing
-caller-side boundary between the inert Qwen provider and a simulation adapter.
-It is deliberately separate from `QwenPolicyProvider`, which continues to parse
-only typed data and never imports an adapter or executes a tool. A host injects
-all three collaborators: a policy provider, a `RobotAdapter`, and an
-independent feedback verifier.
+caller-side boundary between an inert policy provider and a simulation adapter.
+Providers such as `QwenPolicyProvider` and `AstraPolicyProvider` parse model
+output into typed action data; they never import an adapter or execute a tool.
+A host injects all three collaborators: a policy provider, a `RobotAdapter`,
+and an independent feedback verifier. The Astra gateway integration and its
+text-JSON tool-call format are described in
+[`NOTES_ASTRA_POLICY_PROVIDER.md`](NOTES_ASTRA_POLICY_PROVIDER.md).
 
 For one `run_once()` step the loop reads and validates fresh pre-command state,
 sends the caller observation plus that state to exactly one generated joint-group
@@ -92,7 +94,7 @@ cooperative deadline the verifier enforces itself: the loop reports
 interrupt one that overruns.
 
 `run_once(..., image_data_urls=...)` forwards caller-supplied base64 image data
-URLs to `QwenPolicyProvider`'s multimodal request channel; the loop does not
+URLs to the provider's multimodal request channel; the loop does not
 persist or include image bytes in its result details. Camera capture, encoding,
 calibration, and **camera-frame freshness** remain caller responsibilities: the
 loop can validate robot-state receipt time but cannot infer image capture time
