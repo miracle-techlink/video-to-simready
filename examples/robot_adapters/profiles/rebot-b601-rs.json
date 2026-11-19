@@ -1,0 +1,61 @@
+{
+    "schema_version": 1,
+    "kind": "robot_profile",
+    "robot_id": "seeed_rebot_b601_rs",
+    "display_name": "Seeed reBot Arm B601-RS",
+    "profile_revision": "2",
+    "asset_reference": "https://github.com/Seeed-Projects/reBot-Isaacsim/tree/main/usd/ReBot_Arm_RS",
+    "source_reference": "https://github.com/xiayip/rebot_arm_rs_ros2",
+    "state_transport": "ros2:sensor_msgs/msg/JointState:/joint_states",
+    "groups": {
+        "arm": ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"],
+        "gripper": ["gripper_joint1", "gripper_joint2"]
+    },
+    "commandable_groups": ["arm"],
+    "joints": [
+        {"name": "joint1", "group": "arm", "unit": "rad", "lower": -2.8, "upper": 2.8},
+        {"name": "joint2", "group": "arm", "unit": "rad", "lower": 0.0, "upper": 3.63},
+        {"name": "joint3", "group": "arm", "unit": "rad", "lower": 0.0, "upper": 4.23},
+        {"name": "joint4", "group": "arm", "unit": "rad", "lower": -1.88, "upper": 1.6},
+        {
+            "name": "joint5",
+            "group": "arm",
+            "unit": "rad",
+            "lower": -1.57,
+            "upper": 1.57
+        },
+        {
+            "name": "joint6",
+            "group": "arm",
+            "unit": "rad",
+            "lower": -3.14,
+            "upper": 3.14
+        },
+        {
+            "name": "gripper_joint1",
+            "group": "gripper",
+            "unit": "m",
+            "lower": 0.0,
+            "upper": 0.05
+        },
+        {
+            "name": "gripper_joint2",
+            "group": "gripper",
+            "unit": "m",
+            "lower": 0.0,
+            "upper": 0.0715
+        }
+    ],
+    "transport": {
+        "simulation": {
+            "command": "ros2_control:FollowJointTrajectory:/rebot_arm_rs_isaac_trajectory_controller/follow_joint_trajectory",
+            "state_topic": "/joint_states",
+            "notes": "Seeed's reBot-Isaacsim ROS 2 launch path; simulation only."
+        },
+        "hardware": {
+            "command": "ros2_control:FollowJointTrajectory:/rebot_arm_rs_trajectory_controller/follow_joint_trajectory",
+            "verified": false,
+            "notes": "Community B601-RS ros2_control driver config; its arm limits and mimic-finger geometry were traced from the driver source. It is not the official Seeed ROS 2 endpoint; the dedicated official ROS 2 profile/config remains hardware-unverified and command-unset."
+        }
+    }
+}

@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "kind": "robot_profile",
+  "robot_id": "agibot_genie_g2_crsb_sim",
+  "display_name": "AgiBot Genie G2 (crsB, no gripper) — Genie Sim",
+  "profile_revision": "1",
+  "asset_reference": "https://github.com/AgibotTech/genie_sim_robot_model/blob/main/robots/genie/g2/g2_crs_no_gripper.urdf.xacro",
+  "source_reference": "https://github.com/AgibotTech/genie_sim/tree/main/source/geniesim_ros",
+  "state_transport": "ros2:sensor_msgs/msg/JointState:/joint_states",
+  "groups": {
+    "body": ["idx01_body_joint1", "idx02_body_joint2", "idx03_body_joint3", "idx04_body_joint4", "idx05_body_joint5"],
+    "head": ["idx11_head_joint1", "idx12_head_joint2", "idx13_head_joint3"],
+    "left_arm": ["idx21_arm_l_joint1", "idx22_arm_l_joint2", "idx23_arm_l_joint3", "idx24_arm_l_joint4", "idx25_arm_l_joint5", "idx26_arm_l_joint6", "idx27_arm_l_joint7"],
+    "right_arm": ["idx61_arm_r_joint1", "idx62_arm_r_joint2", "idx63_arm_r_joint3", "idx64_arm_r_joint4", "idx65_arm_r_joint5", "idx66_arm_r_joint6", "idx67_arm_r_joint7"]
+  },
+  "joints": [
+    {"name": "idx01_body_joint1", "group": "body", "unit": "rad"},
+    {"name": "idx02_body_joint2", "group": "body", "unit": "rad"},
+    {"name": "idx03_body_joint3", "group": "body", "unit": "rad"},
+    {"name": "idx04_body_joint4", "group": "body", "unit": "rad"},
+    {"name": "idx05_body_joint5", "group": "body", "unit": "rad"},
+    {"name": "idx11_head_joint1", "group": "head", "unit": "rad"},
+    {"name": "idx12_head_joint2", "group": "head", "unit": "rad"},
+    {"name": "idx13_head_joint3", "group": "head", "unit": "rad"},
+    {"name": "idx21_arm_l_joint1", "group": "left_arm", "unit": "rad"},
+    {"name": "idx22_arm_l_joint2", "group": "left_arm", "unit": "rad"},
+    {"name": "idx23_arm_l_joint3", "group": "left_arm", "unit": "rad"},
+    {"name": "idx24_arm_l_joint4", "group": "left_arm", "unit": "rad"},
+    {"name": "idx25_arm_l_joint5", "group": "left_arm", "unit": "rad"},
+    {"name": "idx26_arm_l_joint6", "group": "left_arm", "unit": "rad"},
+    {"name": "idx27_arm_l_joint7", "group": "left_arm", "unit": "rad"},
+    {"name": "idx61_arm_r_joint1", "group": "right_arm", "unit": "rad"},
+    {"name": "idx62_arm_r_joint2", "group": "right_arm", "unit": "rad"},
+    {"name": "idx63_arm_r_joint3", "group": "right_arm", "unit": "rad"},
+    {"name": "idx64_arm_r_joint4", "group": "right_arm", "unit": "rad"},
+    {"name": "idx65_arm_r_joint5", "group": "right_arm", "unit": "rad"},
+    {"name": "idx66_arm_r_joint6", "group": "right_arm", "unit": "rad"},
+    {"name": "idx67_arm_r_joint7", "group": "right_arm", "unit": "rad"}
+  ],
+  "transport": {
+    "simulation": {
+      "command": "genie_sim_ros:sensor_msgs/msg/JointState:/joint_command",
+      "state_topic": "/joint_states",
+      "notes": "Genie Sim G2 simulation only; command joint names and values must match the launched URDF variant."
+    },
+    "hardware": {
+      "command": null,
+      "verified": false,
+      "notes": "The public simulation topic is not evidence of a physical G2 command endpoint. Keep hardware disabled until AgiBot's exact robot SDK/API and commissioning guide are available."
+    }
+  }
+}

@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "kind": "ros2_adapter_config",
+  "robot_id": "seeed_rebot_b601_rs_official_ros2",
+  "profile": "../profiles/rebot-b601-rs-official-ros2.json",
+  "driver_source": {
+    "repository": "https://github.com/Seeed-Projects/reBotArmController_ROS2",
+    "commit": "87780c6a5c2fb43b55ddebda5eac375ceb9c5a40",
+    "launch": "src/rebotarm_bringup/launch/driver.launch.py",
+    "interfaces": "src/rebotarmcontroller/rebotarmcontroller/ros_actions.py"
+  },
+  "state": {
+    "topic": "/rebotarm/joint_states",
+    "type": "sensor_msgs/msg/JointState",
+    "joint_order": ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "gripper_joint1", "gripper_joint2"],
+    "arm_joint_order": ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"],
+    "position_units": {
+      "arm": "rad",
+      "gripper_joint1": "m",
+      "gripper_joint2": "m"
+    },
+    "velocity_units": {
+      "arm": "rad/s",
+      "gripper_joint1": "m/s",
+      "gripper_joint2": "m/s"
+    },
+    "effort_units": {
+      "arm": "N*m",
+      "gripper_joint1": null,
+      "gripper_joint2": null
+    },
+    "gripper_finger_limits_m": {
+      "gripper_joint1": [0.0, 0.05],
+      "gripper_joint2": [0.0, 0.0715]
+    },
+    "notes": "At the pinned driver commit, ros_publishers.py appends the two RS gripper finger names and their derived metre-valued position/velocity/duplicated motor-effort entries after the six arm joints. The gripper effort unit is not documented, so it is unset."
+  },
+  "arm_command": {
+    "action": null,
+    "type": null,
+    "joint_order": ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"],
+    "source_documented_action": "/rebotarm/follow_joint_trajectory",
+    "source_documented_type": "control_msgs/action/FollowJointTrajectory",
+    "source_documented_joint_order_required": true,
+    "notes": "Uncommissioned profile: this config deliberately leaves an executable command endpoint unset. The source-documented endpoint is evidence only, not authorization to create an action client or transmit a goal."
+  },
+  "gripper": {
+    "action": null,
+    "type": null,
+    "source_documented_action": "/rebotarm/gripper/command",
+    "source_documented_type": "control_msgs/action/GripperCommand",
+    "source_documented_joint": "gripper",
+    "source_documented_position_unit": "rad",
+    "source_documented_closed_position": 0.0,
+    "source_documented_open_position": 5.0,
+    "source_documented_state_finger_joints": ["gripper_joint1", "gripper_joint2"],
+    "notes": "The official command is a motor angle in radians, not a prismatic opening-width command. It is excluded from the generic JointCommand profile because that contract has no gripper action capability. The published /rebotarm/joint_states stream carries only the two derived metre-valued finger joints for the gripper, never the motor axis."
+  },
+  "stop": {
+    "command": null,
+    "source_documented_disable_service": "/rebotarm/disable",
+    "source_documented_safe_home_service": "/rebotarm/safe_home",
+    "safety_rated_emergency_stop": null,
+    "notes": "No dedicated or safety-rated emergency-stop interface was found in the inspected official driver source. Do not use software cancellation, disable, safe_home, or process exit as an E-stop."
+  },
+  "hardware": {
+    "verified": false,
+    "ros_graph_observed": false,
+    "physical_robot_observed": false,
+    "hardware_commands_sent": false
+  }
+}
