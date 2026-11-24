@@ -2,7 +2,7 @@ name: portable-ci
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, feat/robot-adapters]
   push:
     branches: [main]
   merge_group:
@@ -116,7 +116,7 @@ jobs:
         run: >-
           mkdir -p ci-results &&
           python -m pytest
-          tests/core tests/geometry tests/architecture
+          tests/core tests/geometry tests/architecture tests/robotics
           -m "not real_model and not gpu"
           -q --junitxml=ci-results/contract.xml
       - name: Fake worker self-tests (synthetic only)

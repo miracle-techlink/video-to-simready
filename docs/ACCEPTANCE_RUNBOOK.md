@@ -66,6 +66,9 @@ python -m pytest -m real_model --run-real-model -q
 
 ## 5. GitHub Actions 边界(现状,不得虚报)
 
+机器人策略接入、Isaac Sim GPU 回放与实时 Astra demo 的单独步骤见
+[XPolicyLab 模型接入与 Astra Isaac Sim 验收](ASTRA_ISAAC_ACCEPTANCE.md)。
+
 - 仓库 Actions secrets 为空,self-hosted runner 为空:**"GPU 自动 CI
   已接好"不成立**。组织/环境级资源未核实,不得引用。
 - 不注册共享服务器 runner,不上传 SSH 凭据,不对 fork/外部 PR 自动

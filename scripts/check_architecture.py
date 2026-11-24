@@ -30,7 +30,8 @@ def check_architecture(source: Path, rules: dict) -> list[str]:
         module = ".".join(
             [rules["package"], *relative.with_suffix("").parts]
         ).removesuffix(".__init__")
-        tree = ast.parse(path.read_text(), filename=str(path))
+        code = path.read_text(encoding="utf-8")
+        tree = ast.parse(code, filename=str(path))
         parsed[module] = tree
         domain = relative.parts[0] if len(relative.parts) > 1 else None
         importlib_names = {"importlib"}
@@ -50,7 +51,7 @@ def check_architecture(source: Path, rules: dict) -> list[str]:
                 )
         if path.stem in rules["forbidden_module_names"]:
             errors.append(f"{relative}: ambiguous module name")
-        if path.name == "__main__.py" and len(path.read_text().splitlines()) > 8:
+        if path.name == "__main__.py" and len(code.splitlines()) > 8:
             errors.append(f"{relative}: entry point must only delegate to cli.main")
         for node in ast.walk(tree):
             imports = []
@@ -94,7 +95,9 @@ def check_architecture(source: Path, rules: dict) -> list[str]:
                             errors.append(
                                 f"{relative}:{node.lineno}: use explicit absolute imports"
                             )
-                    elif str(relative) not in rules.get("dynamic_import_routers", {}):
+                    elif relative.as_posix() not in rules.get(
+                        "dynamic_import_routers", {}
+                    ):
                         errors.append(
                             f"{relative}:{node.lineno}: dynamic import requires a declared CLI router"
                         )
@@ -235,7 +238,9 @@ def main() -> int:
     )
     args = parser.parse_args()
     rules = json.loads(
-        (args.root / "configs/architecture/module_boundaries.json").read_text()
+        (args.root / "configs/architecture/module_boundaries.json").read_text(
+            encoding="utf-8"
+        )
     )
     errors = check_architecture(args.root / rules["source_directory"], rules)
     for error in errors:
