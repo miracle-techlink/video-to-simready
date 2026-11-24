@@ -118,6 +118,7 @@
         "evaluation",
         "ingestion",
         "simulation",
+        "robotics",
         "assets"
       ],
       "layers": {
@@ -151,6 +152,13 @@
         "geometry",
         "execution",
         "assets"
+      ]
+    },
+    "robotics": {
+      "responsibility": "Robot profiles, unit-normalized state/command contracts and simulator/hardware adapter interfaces",
+      "allowed_dependencies": [
+        "core",
+        "geometry"
       ]
     },
     "assets": {
@@ -194,6 +202,7 @@
     "simready.geometry.depth_projection.backproject_depth",
     "simready.assets.physics.physical_spec.normalize_physics",
     "simready.simulation.camera_calibration.rendered_camera_calibration",
+    "simready.robotics.contracts.validate_joint_command",
     "simready.evaluation.inspection.physical_assets.inspect_physical_assets",
     "simready.evaluation.inspection.physical_receipt.verify_physical_receipt",
     "simready.workflows.pipelines.semantic_assets.run_semantic_assets",
