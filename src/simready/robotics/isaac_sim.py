@@ -18,8 +18,8 @@ class IsaacSimArticulationAdapter:
     """Map normalized joint commands to one initialized Isaac articulation.
 
     The adapter does not create or own ``SimulationApp`` or camera sensors.
-    The caller owns the Isaac lifecycle and supplies a world per
-    accepted action. This keeps agent/tool latency outside simulation time.
+    The caller owns the Isaac lifecycle. Each accepted action advances the
+    configured number of physics steps and renders the last step.
     """
 
     def __init__(
@@ -27,10 +27,15 @@ class IsaacSimArticulationAdapter:
         profile: RobotProfile,
         articulation: Any,
         world: Any,
+        *,
+        physics_steps_per_command: int = 1,
     ):
+        if type(physics_steps_per_command) is not int or physics_steps_per_command < 1:
+            raise ValueError("physics_steps_per_command must be a positive integer")
         self.profile = profile
         self._articulation = articulation
         self._world = world
+        self._physics_steps_per_command = physics_steps_per_command
         self._joint_names = list(articulation.dof_names)
         self._indices: dict[str, int] = {}
         self._connected = False
@@ -103,13 +108,14 @@ class IsaacSimArticulationAdapter:
         self._articulation.apply_action(
             ArticulationAction(joint_positions=targets, joint_indices=indices)
         )
-        self._world.step(render=True)
+        for index in range(self._physics_steps_per_command):
+            self._world.step(render=index == self._physics_steps_per_command - 1)
         self._last_sequence = command.sequence
         return CommandReceipt(
             sequence=command.sequence,
             accepted=True,
             accepted_monotonic_ns=time.monotonic_ns(),
-            detail="one Isaac physics/render step applied; inspect returned state before next action",
+            detail=f"Isaac physics steps applied: {self._physics_steps_per_command}",
         )
 
     def stop(self) -> None:

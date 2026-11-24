@@ -1,0 +1,7 @@
+{
+  "tool": "move_eef",
+  "arguments": {
+    "targets": {"left_z": 0.13},
+    "note": "Fixture: lift the simulated carriage to the green marker."
+  }
+}
